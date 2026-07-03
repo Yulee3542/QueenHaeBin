@@ -1,0 +1,16 @@
+# Claude Code related files - keep out of the shared team repo
+.claude/
+CLAUDE.md
+AGENTS.md
+HANDOFF.md
+.mcp.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
