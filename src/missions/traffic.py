@@ -4,6 +4,7 @@ except ImportError:
     cv2 = None
 
 from .base import Mission
+from .lane_follow import follow_lane
 
 try:
     from ..vendor import Function_Library as fl
@@ -53,6 +54,8 @@ class TrafficMission(Mission):
     name = "traffic"
 
     def on_start(self, car, config):
+        assert set(config.LANE_EDGE) == {"width", "height", "gap", "threshold"}, \
+            f"config.LANE_EDGE 키가 예상과 다름: {set(config.LANE_EDGE)}"
         self.config = config
         self.env = fl.libCAMERA() if fl is not None else None
         self.waiting = False  # 정지선/빨간불로 멈춰 신호 대기 중인지
@@ -78,16 +81,7 @@ class TrafficMission(Mission):
             return
 
         car.drive(self.config.DRIVE_SPEED)
-        bottom = sensors["bottom"]
-        if bottom is None or self.env is None:
-            return
-        direction = self.env.edge_detection(bottom, **self.config.LANE_EDGE)
-        if direction == fl.FORWARD:
-            car.steer("F")
-        elif direction == fl.LEFT:
-            car.steer("L")
-        elif direction == fl.RIGHT:
-            car.steer("R")
+        follow_lane(self.env, car, sensors["bottom"], self.config.LANE_EDGE)
 
     def stop_line_detected(self, bottom_frame):
         # TODO(1단계): 하단 프레임 아래쪽 ROI에서 가로로 긴 흰색 선 비율로 판정

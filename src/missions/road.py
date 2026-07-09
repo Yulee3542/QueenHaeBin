@@ -1,4 +1,5 @@
 from .base import Mission
+from .lane_follow import follow_lane
 
 try:
     from ..vendor import Function_Library as fl
@@ -11,7 +12,7 @@ class RoadMission(Mission):
 
     단계별 목표:
       (1) 직진, 스티어링          — 동작
-      (2) 차선 인식 도로 주행      — 동작 (팀 검증 edge_detection 사용)
+      (2) 차선 인식 도로 주행      — 동작 (팀 검증 edge_detection 사용, lane_follow.py 공유)
       (3) 차선 변경하며 도로 주행  — TODO: lane_change()
       (4) 장애물 피해 차선 변경    — TODO: 회피 방향 결정 + lane_change 연결
     """
@@ -19,6 +20,8 @@ class RoadMission(Mission):
     name = "road"
 
     def on_start(self, car, config):
+        assert set(config.LANE_EDGE) == {"width", "height", "gap", "threshold"}, \
+            f"config.LANE_EDGE 키가 예상과 다름: {set(config.LANE_EDGE)}"
         self.config = config
         self.env = fl.libCAMERA() if fl is not None else None
         car.go()
@@ -32,18 +35,7 @@ class RoadMission(Mission):
             return
 
         # (2) 차선 인식 주행 — 검증된 파라미터는 config.LANE_EDGE
-        bottom = sensors["bottom"]
-        if bottom is None or self.env is None:
-            return
-        direction = self.env.edge_detection(bottom, **self.config.LANE_EDGE)
-
-        if direction == fl.FORWARD:
-            car.steer("F")
-        elif direction == fl.LEFT:
-            car.steer("L")
-        elif direction == fl.RIGHT:
-            car.steer("R")
-        # None이면 이전 조향 유지 (main3 검증 동작과 동일)
+        follow_lane(self.env, car, sensors["bottom"], self.config.LANE_EDGE)
 
     def lane_change(self, car, direction):
         # TODO(3단계): 차선 변경 기동 — steer_pulse 시퀀스로 옆 차선 진입 후 복귀.
