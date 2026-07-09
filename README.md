@@ -101,25 +101,53 @@ python main.py --mission road --show
 
 ## WSL2에서 실행
 
-WSL2는 USB 장치가 기본적으로 안 보이므로 **카메라 + 아두이노 + 라이다를 usbipd로 붙여야 한다.**
+WSL2는 USB 장치가 기본적으로 안 보이므로 **카메라 2개 + 아두이노 + 라이다, 총 4개 장치를 usbipd로 붙여야 한다.**
 
-1. Windows PowerShell(관리자):
-   ```powershell
-   winget install usbipd
-   usbipd list                        # 장치 BUSID 확인
-   usbipd bind --busid <ID>           # 장치마다 1회
-   usbipd attach --wsl --busid <ID>   # WSL 재시작/장치 재연결 시마다
-   ```
-2. WSL 안에서 확인:
-   ```bash
-   ls /dev/video*                     # 카메라
-   ls /dev/ttyACM* /dev/ttyUSB*       # 아두이노/라이다
-   python tools/check_env.py
-   ```
+### 0. 최초 1회: usbipd 설치
 
+Windows PowerShell(관리자):
+```powershell
+winget install usbipd
+```
+설치 후 새 PowerShell 창을 열어야 `usbipd` 명령이 인식된다.
+
+### 1. 장치별 BUSID 확인 및 bind (장치마다 최초 1회, 관리자 PowerShell)
+
+```powershell
+usbipd list
+```
+`Connected` 목록에서 카메라 2개(C920 등 UVC 장치), 아두이노 메가(Arduino/CH340), 라이다(CP210x/Silicon Labs)의 BUSID를 확인한다 (예: `1-3`, `2-4` 형태). 확인한 BUSID마다:
+```powershell
+usbipd bind --busid <ID>
+```
+`bind`는 Windows가 그 장치를 WSL과 공유하도록 등록하는 것으로, 한 번 해두면 이후에는 다시 안 해도 된다(장치 자체를 바꾸지 않는 한). **USB 포트를 바꿔 꽂으면 BUSID가 달라지므로 다시 bind해야 한다** — 가능하면 항상 같은 포트를 쓸 것.
+
+### 2. 세션마다: WSL에 attach
+
+포트를 바꾸지 않았다면 매번 WSL을 재시작하거나 장치를 재연결할 때 attach가 필요하다:
+```powershell
+usbipd attach --wsl --busid <ID>   # 장치 4개 각각
+```
+매번 수동으로 치기 번거로우면 `--auto-attach`를 쓰면 그 창을 켜둔 동안 장치가 뽑혔다 꽂혀도(예: 아두이노 리셋) 자동으로 재연결해준다 — 4개 장치마다 별도 PowerShell 창에서 실행:
+```powershell
+usbipd attach --wsl --busid <ID> --auto-attach
+```
+
+### 3. WSL 안에서 확인
+
+```bash
+ls /dev/video*                     # 카메라 2개 (video0, video2 등 — 짝수만 실제 장치인 경우가 많음)
+ls /dev/ttyACM* /dev/ttyUSB*       # 아두이노(ttyACM*)/라이다(ttyUSB*)
+python tools/check_env.py          # 위 4개 + 파이썬 패키지 한 번에 점검
+```
+
+### usbipd 문제 해결
+
+- `usbipd list`에서 상태가 `Attached`가 아니라 `Shared`나 `Not shared`면 아직 attach 전 — 1~2단계 다시 확인.
 - 카메라가 attach돼도 `/dev/video*`가 안 생기면 WSL 커널이 UVC를 지원하는지 확인 (`wsl --update`).
 - `--show` 카메라 창은 WSLg(Windows 11 기본)로 그대로 뜬다.
 - 장치가 없어도 `main.py`는 경고만 내고 실행된다 — 로직 개발은 하드웨어 없이 가능.
+- 아두이노가 시리얼 연결 시 리셋되면서 USB 장치로 잠깐 사라졌다 나타날 수 있다 — 이 경우 attach가 끊기므로 `--auto-attach`를 권장.
 
 ## 문제 해결
 
