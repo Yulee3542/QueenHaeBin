@@ -14,10 +14,9 @@ from src.nodes.lidar_node import LidarNode
 from src.nodes.ports import autodetect_ports
 
 MISSION_DESC = {
-    "track": "트랙 주행 (차선 추종)",
-    "obstacle": "장애물 회피",
-    "parking": "수직 주차",
-    "escape": "탈출",
+    "road": "도로 주행 — 차선 인식/차선 변경/장애물 회피",
+    "traffic": "신호등 주행 — 정지선/신호등 인식",
+    "t_parking": "T 주차 — 라이다 맵/후방캠 주차선",
 }
 
 
@@ -35,13 +34,15 @@ def pick_mission():
         print("잘못된 입력입니다.")
 
 
-def show_frames(top, bottom):
+def show_frames(top, bottom, rear):
     if cv2 is None:
         return True
     if top is not None:
-        cv2.imshow("top_camera", top)
+        cv2.imshow("top (traffic light)", top)
     if bottom is not None:
-        cv2.imshow("bottom_camera", bottom)
+        cv2.imshow("bottom (lane)", bottom)
+    if rear is not None:
+        cv2.imshow("rear (parking)", rear)
     return (cv2.waitKey(1) & 0xFF) != ord("q")
 
 
@@ -50,8 +51,11 @@ def main():
     parser.add_argument("--mission", choices=list(MISSIONS), help="생략하면 메뉴에서 선택")
     parser.add_argument("--arduino", default=config.ARDUINO_PORT, help="아두이노 시리얼 포트")
     parser.add_argument("--lidar", default=config.LIDAR_PORT, help="라이다 시리얼 포트")
-    parser.add_argument("--top-camera", type=int, default=config.TOP_CAMERA)
-    parser.add_argument("--bottom-camera", type=int, default=config.BOTTOM_CAMERA)
+    parser.add_argument("--front-camera", type=int, default=config.FRONT_CAMERA)
+    parser.add_argument("--rear-camera", type=int, default=config.REAR_CAMERA,
+                        help="T주차용 후방 카메라 인덱스 (기본: 미사용)")
+    parser.add_argument("--no-split", action="store_true",
+                        help="전방 프레임 상/하 분할 비활성화")
     parser.add_argument("--show", action="store_true", help="카메라 창 표시 (q로 종료)")
     args = parser.parse_args()
 
@@ -67,8 +71,9 @@ def main():
     print(f"[main] mission={mission_name} arduino={arduino_port} lidar={lidar_port}")
 
     car = ArduinoNode(arduino_port, config.ARDUINO_BAUD)
-    cameras = CameraNode(args.top_camera, args.bottom_camera,
-                         config.FRAME_WIDTH, config.FRAME_HEIGHT)
+    cameras = CameraNode(args.front_camera, args.rear_camera,
+                         split=config.CAMERA_SPLIT and not args.no_split,
+                         width=config.FRAME_WIDTH, height=config.FRAME_HEIGHT)
     lidar = LidarNode(lidar_port, config.LIDAR_BAUD)
 
     period = 1.0 / config.LOOP_HZ
@@ -77,16 +82,17 @@ def main():
     try:
         while True:
             top, bottom = cameras.latest()
+            rear = cameras.rear()
             sensors = {
                 "top": top,
                 "bottom": bottom,
+                "rear": rear,
                 "lidar_min_m": lidar.min_distance_m(config.LIDAR_FRONT_SECTOR),
                 "lidar_scan": lidar.scan,
-                "ultrasonic": car.ultrasonic,
                 "state": car.state,
             }
             mission.step(sensors, car)
-            if args.show and not show_frames(top, bottom):
+            if args.show and not show_frames(top, bottom, rear):
                 break
             time.sleep(period)
     except KeyboardInterrupt:

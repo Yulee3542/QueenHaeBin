@@ -1,6 +1,5 @@
-from .track import TrackMission
-from .obstacle import ObstacleMission
-from .parking import ParkingMission
-from .escape import EscapeMission
+from .road import RoadMission
+from .traffic import TrafficMission
+from .t_parking import TParkingMission
 
-MISSIONS = {m.name: m for m in (TrackMission, ObstacleMission, ParkingMission, EscapeMission)}
+MISSIONS = {m.name: m for m in (RoadMission, TrafficMission, TParkingMission)}

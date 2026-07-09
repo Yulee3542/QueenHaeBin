@@ -10,13 +10,16 @@ except ImportError:
 class ArduinoNode:
     """아두이노 시리얼 링크. 프로토콜은 README '시리얼 프로토콜' 절 참고.
 
-    수신 스레드가 텔레메트리(state, 초음파)를 갱신하고, 펌웨어 워치독(500ms)이
-    통신 두절 시 차를 세우도록 200ms마다 현재 속도를 keepalive로 재전송한다.
+    조향은 전용 스티어링 모터의 120ms 펄스 방식이다: L/R 한 번 = 한 펄스만큼
+    바퀴가 돌아가고 그 각도가 유지된다. steer()는 같은 값 연속 호출을 무시하고
+    (검증된 main3 방식), 펄스를 반복해야 하는 기동은 steer_pulse()를 쓴다.
+
+    펌웨어 워치독(500ms)이 통신 두절 시 차를 세우도록 수신 스레드가 200ms마다
+    현재 속도를 keepalive로 재전송한다.
     """
 
     def __init__(self, port, baud=9600):
-        self.state = None               # 0 정지 / 1 전진 / 2 후진
-        self.ultrasonic = (None, None)  # (left_mm, right_mm)
+        self.state = None  # 0 정지 / 1 전진 / 2 후진
         self._ser = None
         self._speed = 0
         self._last = {}
@@ -53,19 +56,7 @@ class ArduinoNode:
             except Exception:
                 time.sleep(0.05)
                 continue
-            if not line:
-                continue
-            if line.startswith("U,"):
-                parts = line.split(",")
-                if len(parts) == 3:
-                    try:
-                        left, right = int(parts[1]), int(parts[2])
-                    except ValueError:
-                        continue
-                    # 펌웨어는 에코 타임아웃 시 -1을 보낸다
-                    self.ultrasonic = (left if left > 0 else None,
-                                       right if right > 0 else None)
-            elif line in ("0", "1", "2"):
+            if line in ("0", "1", "2"):
                 self.state = int(line)
 
     def _write(self, text):
@@ -91,13 +82,14 @@ class ArduinoNode:
         self._speed = max(-255, min(255, int(speed)))
 
     def steer(self, direction):
+        """조향 (같은 방향 연속 호출은 무시). F=조향 모터 정지, L/R=한 펄스."""
         self._send_once("steer", direction if direction in ("F", "L", "R") else "F")
 
-    def set_camera_obstacle(self, detected):
-        self._send_once("cam", "C" if detected else "c")
-
-    def set_lidar_obstacle(self, detected):
-        self._send_once("lid", "D" if detected else "d")
+    def steer_pulse(self, direction):
+        """조향 펄스를 강제로 한 번 더 보낸다 (주차 등 반복 조향 기동용)."""
+        if direction in ("F", "L", "R"):
+            self._write(direction)
+            self._last["steer"] = direction
 
     def stop(self):
         self._speed = 0

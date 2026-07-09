@@ -3,3 +3,4 @@ opencv-python>=4.8
 numpy>=1.24
 pyserial>=3.5
 rplidar-roboticia
+matplotlib>=3.7        # src/vendor/Function_Library.py 의존

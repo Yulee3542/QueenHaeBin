@@ -10,17 +10,23 @@ WSL2_HINT = "WSL2라면 Windows에서 usbipd attach 필요 (README 'WSL2에서 �
 
 
 class CameraNode:
-    """상/하단 USB 카메라를 백그라운드 스레드로 계속 읽어 최신 프레임을 유지한다."""
+    """전방 C920(+선택 후방) 카메라를 백그라운드 스레드로 계속 읽는다.
 
-    def __init__(self, top_index, bottom_index, width=640, height=480):
+    split=True(기본)면 전방 프레임을 상/하 절반으로 나눠 latest()가
+    (top=신호등용, bottom=차선용)을 반환한다. 후방 카메라는 rear()로 접근.
+    """
+
+    def __init__(self, front_index, rear_index=None, split=True,
+                 width=640, height=480):
+        self._split = split
         self._width = width
         self._height = height
         self._lock = threading.Lock()
-        self._top_frame = None
-        self._bottom_frame = None
-        self._top = self._open(top_index, "top")
-        self._bottom = self._open(bottom_index, "bottom")
-        self._running = self._top is not None or self._bottom is not None
+        self._front_frame = None
+        self._rear_frame = None
+        self._front = self._open(front_index, "front")
+        self._rear = self._open(rear_index, "rear") if rear_index is not None else None
+        self._running = self._front is not None or self._rear is not None
         if self._running:
             threading.Thread(target=self._loop, daemon=True).start()
 
@@ -44,25 +50,35 @@ class CameraNode:
 
     def _loop(self):
         while self._running:
-            if self._top is not None:
-                ok, frame = self._top.read()
+            if self._front is not None:
+                ok, frame = self._front.read()
                 if ok:
                     with self._lock:
-                        self._top_frame = frame
-            if self._bottom is not None:
-                ok, frame = self._bottom.read()
+                        self._front_frame = frame
+            if self._rear is not None:
+                ok, frame = self._rear.read()
                 if ok:
                     with self._lock:
-                        self._bottom_frame = frame
+                        self._rear_frame = frame
 
     def latest(self):
-        """(top_frame, bottom_frame). 없는 카메라는 None."""
+        """(top_frame, bottom_frame). split이면 전방 프레임의 상/하 절반."""
         with self._lock:
-            return self._top_frame, self._bottom_frame
+            frame = self._front_frame
+        if frame is None:
+            return None, None
+        if self._split:
+            h = frame.shape[0]
+            return frame[:h // 2, :], frame[h // 2:, :]
+        return frame, frame
+
+    def rear(self):
+        with self._lock:
+            return self._rear_frame
 
     def close(self):
         self._running = False
-        for cap in (self._top, self._bottom):
+        for cap in (self._front, self._rear):
             if cap is not None:
                 cap.release()
         if cv2 is not None:
