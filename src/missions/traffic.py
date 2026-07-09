@@ -1,3 +1,5 @@
+import time
+
 try:
     import cv2
 except ImportError:
@@ -44,11 +46,19 @@ class TrafficMission(Mission):
     """2. 신호등 주행
 
     목표:
-      (1) 정지선 인식      — TODO: stop_line_detected()
+      (1) 정지선 인식      — 테스트 구현 (흰색 가로 밴드, 행 채움비 판정)
       (2) 신호등 라이트 인식 — 동작 (HSV 픽셀 비율 판정)
 
     동작: 차선 추종 주행 중 정지선을 만나면 정지, 초록불이면 다시 출발.
     빨간불은 언제든 즉시 정지 (main3 검증 로직과 동일).
+
+    대기 상태 구분 (wait):
+      "red"  — 빨간불을 본 대기. 초록불이 뜰 때까지 무기한 대기
+               (빨간불 출발은 규정 감점이라 타임아웃 없음).
+      "line" — 정지선 대기. 초록불이면 출발, 신호등이 아예 안 보이면
+               wait_max_s 후 경고 출력 후 재출발 (교착 방지 가드 —
+               규정상 감점 여지가 있어 wait_max_s는 팀 확인 필요).
+    재출발 직후에는 cooldown_s 동안 같은 정지선에 재정지하지 않는다.
     """
 
     name = "traffic"
@@ -58,32 +68,67 @@ class TrafficMission(Mission):
             f"config.LANE_EDGE 키가 예상과 다름: {set(config.LANE_EDGE)}"
         self.config = config
         self.env = fl.libCAMERA() if fl is not None else None
-        self.waiting = False  # 정지선/빨간불로 멈춰 신호 대기 중인지
+        self._now = time.monotonic  # 테스트에서 가짜 시계 주입 지점
+        self.wait = None            # None | "line" | "red"
+        self.wait_t0 = 0.0
+        self.cooldown_until = 0.0
         car.go()
         car.drive(config.DRIVE_SPEED)
 
     def step(self, sensors, car):
+        now = self._now()
         color = detect_light_color(sensors["top"], self.config.TRAFFIC_PIXEL_RATIO)
 
-        if color == "red":
-            self.waiting = True
+        if color == "red" and self.wait != "red":
+            self.wait = "red"
+            self.wait_t0 = now
 
-        if self.waiting:
+        if self.wait is not None:
             car.drive(0)
             if color == "green":
-                self.waiting = False
-                car.drive(self.config.DRIVE_SPEED)
+                self._resume(car, now)
+            elif self.wait == "line" and color is None and \
+                    now - self.wait_t0 >= self.config.STOP_LINE["wait_max_s"]:
+                print("[traffic] 신호등 미검출 — 대기 시간 초과, 재출발")
+                self._resume(car, now)
             return
 
-        if self.stop_line_detected(sensors["bottom"]):
-            self.waiting = True
+        if now >= self.cooldown_until and self.stop_line_detected(sensors["bottom"]):
+            self.wait = "line"
+            self.wait_t0 = now
             car.drive(0)
             return
 
         car.drive(self.config.DRIVE_SPEED)
         follow_lane(self.env, car, sensors["bottom"], self.config.LANE_EDGE)
 
+    def _resume(self, car, now):
+        self.wait = None
+        self.cooldown_until = now + self.config.STOP_LINE["cooldown_s"]
+        car.drive(self.config.DRIVE_SPEED)
+
     def stop_line_detected(self, bottom_frame):
-        # TODO(1단계): 하단 프레임 아래쪽 ROI에서 가로로 긴 흰색 선 비율로 판정
-        # (힌트: cv2.inRange 흰색 → 행별 픽셀 합 → 임계 초과 행이 연속되면 정지선)
-        return False
+        """(1단계) 하단 ROI에서 가로로 긴 흰색 밴드 검출.
+
+        흰색(저채도·고명도) 마스크 → 행별 흰 픽셀 비율 → row_fill 이상인
+        행이 min_rows 연속이면 정지선. 세로 차선은 행 채움비가 낮고,
+        횡단보도(진행방향 줄무늬)는 폭 점유가 ~60%라 row_fill 0.7을 못 넘는다.
+        """
+        if cv2 is None or bottom_frame is None:
+            return False
+        try:
+            sl = self.config.STOP_LINE
+            h, w = bottom_frame.shape[:2]
+            roi = bottom_frame[int(h * sl["roi_top"]):, :]
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, (0, 0, sl["v_min"]), (179, sl["s_max"], 255))
+            row_frac = mask.sum(axis=1) / (255.0 * w)
+            run = 0
+            for f in row_frac:
+                run = run + 1 if f >= sl["row_fill"] else 0
+                if run >= sl["min_rows"]:
+                    return True
+            return False
+        except Exception as e:
+            print(f"[traffic] 정지선 감지 실패, 이번 프레임 스킵: {e}")
+            return False

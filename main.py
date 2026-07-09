@@ -75,7 +75,9 @@ def main():
                          split=config.CAMERA_SPLIT and not args.no_split,
                          width=config.FRAME_WIDTH, height=config.FRAME_HEIGHT,
                          rotate=config.FRONT_CAMERA_ROTATE)
-    lidar = LidarNode(lidar_port, config.LIDAR_BAUD)
+    lidar = LidarNode(lidar_port, config.LIDAR_BAUD,
+                      mount=config.LIDAR_MOUNT,
+                      self_mask_deg=config.LIDAR_SELF_MASK_DEG)
 
     period = 1.0 / config.LOOP_HZ
     mission.on_start(car, config)
@@ -88,7 +90,7 @@ def main():
                 "top": top,
                 "bottom": bottom,
                 "rear": rear,
-                "lidar_min_m": lidar.min_distance_m(config.LIDAR_FRONT_SECTOR),
+                "lidar_min_m": lidar.min_distance_m(config.LIDAR_REAR_SECTOR),
                 "lidar_scan": lidar.scan,
                 "state": car.state,
             }
