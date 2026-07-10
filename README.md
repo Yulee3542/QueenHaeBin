@@ -16,18 +16,23 @@ cd autodrive_skku
 source ~/ros2_ws/install/setup.bash
 python3 tools/check_env.py                  # 카메라/시리얼/ROS 패키지 점검
 python3 tools/run_tests.py                  # 모듈별 on/off 테스트 러너 (--list로 목록 확인, 하드웨어 불필요)
-ros2 launch autodrive_skku_ros bringup.launch.py   # 미션 메뉴가 뜬다
+ros2 launch autodrive_skku_ros bringup.launch.py mission:=road show:=true
 ```
 
-미션을 미리 정해서 바로 실행할 수도 있다:
+**`mission:=` 인자는 필수다** — ROS 2 launch 시스템이 자식 프로세스의 stdin을 연결하지
+않는 알려진 제약([ros2/launch#735](https://github.com/ros2/launch/issues/735)) 때문에,
+`ros2 launch`로 띄운 `mission_node`는 기존처럼 메뉴에서 고르는 대화형 선택을 할 수 없다
+(인자를 생략하면 에러 메시지를 내고 바로 종료). 메뉴가 꼭 필요하면 다른 노드는 그대로
+launch로 띄운 채 `mission_node`만 별도 터미널에서 직접 실행할 것 (이 경우는 stdin이
+정상 동작한다):
 
 ```bash
-ros2 launch autodrive_skku_ros bringup.launch.py mission:=road show:=true
+ros2 run autodrive_skku_ros mission_node
 ```
 
 | launch 인자 | 설명 |
 |------|------|
-| `mission:={road,traffic,t_parking}` | 생략하면 대화형 메뉴에서 선택 |
+| `mission:={road,traffic,t_parking}` (필수) | `ros2 launch`에서는 생략 불가 (위 제약 참고) |
 | `arduino_port:=/dev/ttyACM0` | 아두이노 포트 (기본: 자동 감지) |
 | `lidar_port:=/dev/ttyUSB0` | 라이다 포트 (기본: 자동 감지) |
 | `front_camera:=0` | 전방 카메라 인덱스 |

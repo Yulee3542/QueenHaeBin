@@ -1,4 +1,5 @@
 import math
+import sys
 
 import numpy as np
 import rclpy
@@ -36,6 +37,26 @@ def pick_mission():
         if choice.isdigit() and 1 <= int(choice) <= len(names):
             return names[int(choice) - 1]
         print("잘못된 입력입니다.")
+
+
+def resolve_mission(node):
+    """mission 파라미터가 비었으면: stdin이 진짜 tty일 때만(= 'ros2 run'으로 직접
+    실행) 대화형 메뉴로 폴백한다. 'ros2 launch'는 자식 프로세스의 stdin을 연결하지
+    않는 launch 시스템 자체의 알려진 제약(ros2/launch#735)이라 input()이 그냥
+    영원히 멈춘다 — 조용히 멈추는 대신 바로 에러로 안내한다."""
+    name = node.get_parameter("mission").value
+    if name:
+        return name
+    if sys.stdin.isatty():
+        return pick_mission()
+    node.get_logger().fatal(
+        "mission 파라미터가 비어 있고 stdin이 tty가 아닙니다. 'ros2 launch'는 자식 "
+        "프로세스의 stdin을 연결하지 않아 대화형 메뉴를 쓸 수 없습니다(ROS 2 launch "
+        "자체의 알려진 제약, ros2/launch#735) — "
+        "'ros2 launch autodrive_skku_ros bringup.launch.py mission:=road'처럼 launch "
+        "인자로 미션을 지정하세요. (대화형 메뉴는 'ros2 run autodrive_skku_ros "
+        "mission_node'로 직접 실행할 때만 동작합니다.)")
+    raise SystemExit(1)
 
 
 def show_frames(top, bottom, rear):
@@ -115,7 +136,7 @@ class MissionNode(Node):
         self._car = RosCarProxy(self)
         self._show = self.get_parameter("show").value
 
-        mission_name = self.get_parameter("mission").value or pick_mission()
+        mission_name = resolve_mission(self)
         self.get_logger().info(f"mission={mission_name}")
         self._mission = MISSIONS[mission_name]()
         self._mission.on_start(self._car, config)
@@ -156,7 +177,11 @@ class MissionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = MissionNode()
+    try:
+        node = MissionNode()
+    except SystemExit:
+        rclpy.shutdown()
+        raise
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

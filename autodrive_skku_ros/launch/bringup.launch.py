@@ -3,8 +3,10 @@
 사용 예:
   ros2 launch autodrive_skku_ros bringup.launch.py mission:=road foxglove_port:=8765
 
-mission 인자를 생략하면 mission_node가 기존과 동일한 대화형 메뉴로 폴백한다
-(포그라운드 터미널에서 이 launch만 단독 실행할 때만 stdin이 정상 동작한다).
+mission 인자는 필수로 지정할 것 — ROS 2 launch 시스템은 자식 프로세스의 stdin을
+연결하지 않는 알려진 제약(ros2/launch#735)이 있어 mission_node의 대화형 메뉴가
+여기서는 동작하지 않는다(생략하면 mission_node가 에러 메시지를 내고 즉시 종료).
+대화형 메뉴가 필요하면 'ros2 run autodrive_skku_ros mission_node'로 직접 실행할 것.
 
 arduino_port/lidar_port를 생략하면 시리얼 포트를 자동 감지한다(기존
 tools/ports.py의 autodetect_ports()를 launch 생성 시점에 그대로 재사용).
@@ -22,8 +24,8 @@ def generate_launch_description():
     auto_arduino, auto_lidar = autodetect_ports()
 
     mission_arg = DeclareLaunchArgument(
-        "mission", default_value="",
-        description="road|traffic|t_parking. 생략하면 대화형 메뉴로 폴백")
+        "mission",  # default_value 없음 = 필수 인자, 생략 시 노드 기동 전에 바로 에러
+        description="road|traffic|t_parking (필수 — 대화형 메뉴는 ros2 launch에서 안 됨)")
     arduino_port_arg = DeclareLaunchArgument(
         "arduino_port", default_value=auto_arduino or "",
         description="아두이노 시리얼 포트 (예: /dev/ttyACM0)")
