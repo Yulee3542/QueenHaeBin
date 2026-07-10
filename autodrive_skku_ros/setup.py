@@ -20,7 +20,7 @@ setup(
     zip_safe=True,
     maintainer="Yulee3542",
     maintainer_email="yulee3542@gmail.com",
-    description="autodrive_skku 차량 노드/미션 로직 (ROS 2 Humble)",
+    description="autodrive_skku 차량 노드/미션 로직 (ROS 2)",
     license="MIT",
     tests_require=["pytest"],
     entry_points={
@@ -29,6 +29,7 @@ setup(
             "camera_publisher_node = autodrive_skku_ros.nodes.camera_publisher_node:main",
             "lidar_geometry_node = autodrive_skku_ros.nodes.lidar_geometry_node:main",
             "mission_node = autodrive_skku_ros.nodes.mission_node:main",
+            "teleop_node = autodrive_skku_ros.nodes.teleop_node:main",
         ],
     },
 )

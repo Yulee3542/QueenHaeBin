@@ -44,13 +44,23 @@ ros2 run autodrive_skku_ros mission_node
 ### 수동 모터 테스트 (미션 없이)
 
 자율주행 미션이 차를 조작하지 않는 상태에서 모터/조향을 직접 확인하고 싶으면
-(기존 `tools/hw_test.py`와 같은 목적) `run_mission:=false`로 띄우고 토픽에 직접
-명령을 발행한다:
+(기존 `tools/hw_test.py`와 같은 목적) `run_mission:=false`로 띄우고 키보드로
+조작한다:
 
 ```bash
 ros2 launch autodrive_skku_ros bringup.launch.py run_mission:=false
 
 # 별도 터미널에서:
+ros2 run autodrive_skku_ros teleop_node
+```
+`teleop_node`는 Enter 없이 키 하나로 즉시 반영된다: `g`=주행 허용,
+`w`/`x`=속도 +20/-20, `space`=속도 0, `a`/`d`=좌/우 조향 펄스, `f`=조향 중립,
+`s`=정지, `h`=도움말, `q`=종료. (`mission_node`처럼 실제 stdin이 필요해
+`ros2 launch`가 아니라 `ros2 run`으로 직접 실행해야 한다 — 위 제약 참고.)
+
+한 번씩 스크립트로 명령을 보내고 싶으면 `ros2 topic pub`도 그대로 쓸 수 있다:
+
+```bash
 ros2 topic pub /car/cmd/go std_msgs/msg/Empty {} --once
 ros2 topic pub /car/cmd/drive autodrive_msgs/msg/DriveCmd "{speed: 80}" --once
 ros2 topic pub /car/cmd/steer autodrive_msgs/msg/SteerCmd "{direction: 'L', pulse: true}" --once
