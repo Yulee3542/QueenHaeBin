@@ -7,6 +7,11 @@ keepalive 스레드 포함). ros_main()의 ArduinoBridgeNode가 이 클래스를
 dedup), /car/cmd/steer_pulse(String, 강제) 토픽을 구독해 대응 메서드를 호출하고
 /car/state(Int8)를 발행한다. 시리얼 프로토콜은 README '시리얼 프로토콜' 절 참고.
 
+조향 POT(가변저항, A2)이 장착돼 있으면 기동 시 1회 좌/우 풀락 ADC를 자동으로
+찾아(calibrate_steering) /car/steering_pot(Int32, raw ADC), /car/steering_angle
+(Float32, deg)로 발행한다. POT 미장착이면 자동으로 스킵되고 기존 펄스 방식
+그대로 동작 — 이 하드웨어는 선택사항이다.
+
 오프라인 셀프테스트 (ROS 불필요): python3 -m autodrive_skku_ros.nodes.arduino_node --selftest
 """
 import threading
@@ -31,6 +36,7 @@ class ArduinoNode:
 
     def __init__(self, port, baud=9600):
         self.state = None  # 0 정지 / 1 전진 / 2 후진
+        self.pot_adc = None  # 조향 POT 원시값(A2, 0~1023) — 펌웨어가 항상 보냄
         self._ser = None
         self._speed = 0
         self._last = {}
@@ -69,6 +75,11 @@ class ArduinoNode:
                 continue
             if line in ("0", "1", "2"):
                 self.state = int(line)
+            elif line.startswith("P "):
+                try:
+                    self.pot_adc = int(line[2:])
+                except ValueError:
+                    pass
 
     def _write(self, text):
         if self._ser is None:
@@ -114,10 +125,82 @@ class ArduinoNode:
         if self._ser is not None:
             self._ser.close()
 
+    def calibrate_steering(self, max_pulses=40, settle_s=0.18, stable_count=3,
+                            stable_tol=3, min_span=30, recenter_tol=4,
+                            pot_timeout_s=2.0):
+        """조향 POT 기준 좌/우 풀락 ADC를 실측하고, 중앙으로 복귀시킨 뒤 반환한다.
+
+        방향별로 steer_pulse()를 반복하면서 ADC가 stable_count회 연속
+        stable_tol 이내로 안 바뀌면 기계적 풀락(스토퍼)에 닿았다고 판단한다.
+        각 방향 max_pulses가 상한 — 스토퍼를 못 찾아도 기어박스에 무리가 가지
+        않도록 여기서 반드시 멈춘다.
+
+        POT이 실제로 없어도 A2가 플로팅이라 펌웨어는 계속 "P <adc>" 라인을
+        보낸다 — 그래서 "라인이 오는지"가 아니라 "스윕해봤더니 ADC가 실제로
+        min_span 이상 움직였는지"로 진짜 POT 장착 여부를 판단한다.
+
+        반환: (adc_left, adc_right) — POT 미장착/응답없음이면 (None, None).
+        """
+        t0 = time.time()
+        while self.pot_adc is None and time.time() - t0 < pot_timeout_s:
+            time.sleep(0.05)
+        if self.pot_adc is None:
+            print("[arduino] POT 라인 응답 없음 — 캘리브레이션 스킵")
+            return None, None
+
+        def sweep(direction):
+            history = []
+            for _ in range(max_pulses):
+                self.steer_pulse(direction)
+                time.sleep(settle_s)
+                adc = self.pot_adc
+                if adc is None:
+                    continue
+                history.append(adc)
+                if len(history) >= stable_count and \
+                        max(history[-stable_count:]) - min(history[-stable_count:]) <= stable_tol:
+                    break
+            return history[-1] if history else None
+
+        adc_left = sweep("L")
+        adc_right = sweep("R")
+
+        if adc_left is None or adc_right is None or abs(adc_left - adc_right) < min_span:
+            print("[arduino] POT 값이 조향에 반응하지 않음(미장착 추정) — 캘리브레이션 스킵")
+            self.steer("F")
+            return None, None
+
+        # 방금 R로 풀락(adc_right)까지 왔으므로, 중앙(mid)까지는 부호를 몰라도
+        # "L 방향으로 가면 adc_left에 가까워진다"만 알면 매 틱 방향을 다시 정해
+        # 재수렴시킬 수 있다 — 오버슈트해도 스스로 반대로 튼다.
+        mid = (adc_left + adc_right) / 2.0
+        increasing_dir = "L" if adc_left > adc_right else "R"
+        decreasing_dir = "R" if adc_left > adc_right else "L"
+        for _ in range(max_pulses):
+            adc = self.pot_adc
+            if adc is None or abs(adc - mid) <= recenter_tol:
+                break
+            self.steer_pulse(decreasing_dir if adc > mid else increasing_dir)
+            time.sleep(settle_s)
+
+        self.steer("F")
+        print(f"[arduino] 조향 캘리브레이션 완료: adc_left={adc_left}, adc_right={adc_right}")
+        return adc_left, adc_right
+
 
 # 아두이노 state(0 정지/1 전진/2 후진)가 None(미연결)일 때 Int8로 실어보낼 센티널.
 # 구독 쪽(mission_node)에서 다시 None으로 복원한다.
 STATE_UNKNOWN = -1
+
+
+def adc_to_deg(adc, adc_left, adc_right, angle_left_deg, angle_right_deg):
+    """조향 POT ADC → 각도[deg] 선형 매핑 + 클램프 (calibrate_steering 결과 사용)."""
+    if adc_left == adc_right:
+        return 0.0
+    t = (adc - adc_right) / (adc_left - adc_right)
+    deg = angle_right_deg + t * (angle_left_deg - angle_right_deg)
+    lo, hi = min(angle_left_deg, angle_right_deg), max(angle_left_deg, angle_right_deg)
+    return max(lo, min(hi, deg))
 
 
 # ============================ ROS2 래퍼 ============================
@@ -125,7 +208,7 @@ STATE_UNKNOWN = -1
 def ros_main(args=None):
     import rclpy
     from rclpy.node import Node
-    from std_msgs.msg import Empty, Int8, Int16, String
+    from std_msgs.msg import Empty, Int8, Int16, Int32, Float32, String
 
     from .. import config
     from .ports import autodetect_ports
@@ -137,6 +220,11 @@ def ros_main(args=None):
         dedup) /car/cmd/steer_pulse(String, 강제) 구독 → ArduinoNode의 대응 메서드
         (go/stop/drive/steer/steer_pulse)를 그대로 호출한다. 시리얼 프로토콜·워치독·
         dedupe 로직은 ArduinoNode에 손대지 않고 그대로 재사용한다.
+
+        calibrate_steering 파라미터(기본 true)가 켜져 있으면 시작 시 1회
+        ArduinoNode.calibrate_steering()을 돌려 좌/우 풀락 ADC를 찾고,
+        그 결과로 /car/steering_pot(Int32)·/car/steering_angle(Float32)를
+        계속 발행한다. POT 미장착이면 자동으로 조용히 스킵된다.
         """
 
         def __init__(self):
@@ -144,6 +232,7 @@ def ros_main(args=None):
 
             self.declare_parameter("port", "")
             self.declare_parameter("baud", config.ARDUINO_BAUD)
+            self.declare_parameter("calibrate_steering", True)
 
             port = self.get_parameter("port").value or None
             if port is None:
@@ -152,6 +241,14 @@ def ros_main(args=None):
 
             self._car = ArduinoNode(port, baud)
 
+            self._adc_left = None
+            self._adc_right = None
+            if self.get_parameter("calibrate_steering").value:
+                self.get_logger().info("조향 캘리브레이션 시작 (좌/우 풀락 탐색)...")
+                self._adc_left, self._adc_right = self._car.calibrate_steering()
+                if self._adc_left is None:
+                    self.get_logger().warn("조향 POT 미검출 — 캘리브레이션 없이 펄스 방식으로 동작")
+
             self.create_subscription(Empty, "/car/cmd/go", self._on_go, 10)
             self.create_subscription(Empty, "/car/cmd/stop", self._on_stop, 10)
             self.create_subscription(Int16, "/car/cmd/drive", self._on_drive, 10)
@@ -159,6 +256,8 @@ def ros_main(args=None):
             self.create_subscription(String, "/car/cmd/steer_pulse", self._on_steer_pulse, 10)
 
             self._state_pub = self.create_publisher(Int8, "/car/state", 10)
+            self._pot_pub = self.create_publisher(Int32, "/car/steering_pot", 10)
+            self._angle_pub = self.create_publisher(Float32, "/car/steering_angle", 10)
             self.create_timer(1.0 / config.LOOP_HZ, self._publish_state)
 
         def _on_go(self, _msg):
@@ -179,6 +278,15 @@ def ros_main(args=None):
         def _publish_state(self):
             state = self._car.state
             self._state_pub.publish(Int8(data=STATE_UNKNOWN if state is None else state))
+
+            adc = self._car.pot_adc
+            if adc is None:
+                return
+            self._pot_pub.publish(Int32(data=adc))
+            if self._adc_left is not None:
+                deg = adc_to_deg(adc, self._adc_left, self._adc_right,
+                                  config.STEERING_LIMIT_DEG, -config.STEERING_LIMIT_DEG)
+                self._angle_pub.publish(Float32(data=deg))
 
         def destroy_node(self):
             self._car.close()
@@ -208,7 +316,7 @@ def ros_main(args=None):
 # ========================= 오프라인 테스트 / 셀프테스트 =========================
 
 def selftest():
-    """시리얼 없이 ArduinoNode의 dedup/펄스/정지 로직만 검증한다."""
+    """시리얼 없이 ArduinoNode의 dedup/펄스/정지/조향 캘리브레이션 로직만 검증한다."""
     checks = []
 
     def check(name, ok):
@@ -238,6 +346,46 @@ def selftest():
     car.stop()
     check("stop()은 속도를 0으로 리셋하고 V0/S를 전송",
           car._speed == 0 and writes == ["V0\n", "S"])
+
+    check("adc_to_deg: 좌 최대", abs(adc_to_deg(460, 460, 352, 20, -20) - 20.0) < 1e-9)
+    check("adc_to_deg: 우 최대", abs(adc_to_deg(352, 460, 352, 20, -20) + 20.0) < 1e-9)
+    check("adc_to_deg: 중앙 0도", abs(adc_to_deg(406, 460, 352, 20, -20)) < 1e-9)
+    check("adc_to_deg: 범위 밖 클램프",
+          adc_to_deg(1023, 460, 352, 20, -20) == 20.0 and
+          adc_to_deg(0, 460, 352, 20, -20) == -20.0)
+
+    # POT이 있는 것처럼 시뮬레이션: L 펄스마다 -5(하한 300), R 펄스마다 +5(상한 500)
+    cal_car = ArduinoNode(port=None)
+    cal_car.pot_adc = 400  # 캘리브레이션 시작 전 "POT 응답 있음"으로 간주되는 초기값
+    cal_car._write = lambda text: None
+
+    def fake_steer_pulse(direction):
+        if direction == "L":
+            cal_car.pot_adc = max(300, cal_car.pot_adc - 5)
+        elif direction == "R":
+            cal_car.pot_adc = min(500, cal_car.pot_adc + 5)
+    cal_car.steer_pulse = fake_steer_pulse
+
+    adc_left, adc_right = cal_car.calibrate_steering(
+        max_pulses=80, settle_s=0, stable_count=3, stable_tol=0,
+        min_span=30, recenter_tol=4, pot_timeout_s=0.2)
+    check("캘리브레이션: 좌 풀락(300 근처) 수렴",
+          adc_left is not None and abs(adc_left - 300) <= 3)
+    check("캘리브레이션: 우 풀락(500 근처) 수렴",
+          adc_right is not None and abs(adc_right - 500) <= 3)
+    check("캘리브레이션 후 중앙(400 근처)으로 복귀",
+          abs(cal_car.pot_adc - 400) <= 4)
+
+    # POT 미장착 시뮬레이션: 펄스를 줘도 ADC가 거의 안 움직임 → 스킵돼야 함
+    nopot_car = ArduinoNode(port=None)
+    nopot_car.pot_adc = 512  # 플로팅 A2의 노이즈 섞인 고정값 흉내
+    nopot_car._write = lambda text: None
+    nopot_car.steer_pulse = lambda d: None  # 펄스를 줘도 ADC 불변(POT 미연결)
+    adc_left2, adc_right2 = nopot_car.calibrate_steering(
+        max_pulses=10, settle_s=0, stable_count=3, stable_tol=0,
+        min_span=30, recenter_tol=4, pot_timeout_s=0.2)
+    check("POT 미장착(값 불변)이면 캘리브레이션 스킵 → (None, None)",
+          adc_left2 is None and adc_right2 is None)
 
     passed = sum(1 for _, ok in checks if ok)
     print(f"{passed}/{len(checks)} 통과")

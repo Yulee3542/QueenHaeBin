@@ -22,6 +22,12 @@ Foxglove의 Publish 패널로 /car/cmd/{go,stop,drive,steer}에 직접 명령을
 
 arduino_port/lidar_port를 생략하면 시리얼 포트를 자동 감지한다(기존
 tools/ports.py의 autodetect_ports()를 launch 생성 시점에 그대로 재사용).
+
+calibrate_steering:=true(기본값)면 arduino_node가 뜰 때 조향 POT(A2) 좌/우
+풀락을 자동으로 찾는다 — 바퀴가 몇 초간 실제로 좌우로 움직이니 반드시 바퀴를
+띄우거나 장애물 없는 곳에서 기동할 것. POT 미장착 차량이면 자동으로 스킵되므로
+평소엔 그냥 둬도 되고, 정말 바퀴를 못 움직이는 상황(예: 정비 중)에서만
+calibrate_steering:=false로 끌 것.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -56,11 +62,20 @@ def generate_launch_description():
     show_arg = DeclareLaunchArgument(
         "show", default_value="false", description="카메라 창 표시 (디스플레이 필요)")
     foxglove_port_arg = DeclareLaunchArgument("foxglove_port", default_value="8765")
+    calibrate_steering_arg = DeclareLaunchArgument(
+        "calibrate_steering", default_value="true",
+        description="true면 arduino_node 기동 시 조향 POT 좌/우 풀락을 1회 자동 "
+                     "탐색(수 초 소요, 바퀴가 실제로 움직임). POT 미장착이면 "
+                     "자동으로 조용히 스킵됨. 바퀴를 못 띄운 상태 등에서는 false로.")
 
     arduino_bridge = Node(
         package="autodrive_skku_ros",
         executable="arduino_node",
-        parameters=[{"port": LaunchConfiguration("arduino_port")}],
+        parameters=[{
+            "port": LaunchConfiguration("arduino_port"),
+            "calibrate_steering": ParameterValue(
+                LaunchConfiguration("calibrate_steering"), value_type=bool),
+        }],
     )
 
     camera_publisher = Node(
@@ -111,5 +126,6 @@ def generate_launch_description():
     return LaunchDescription([
         run_mission_arg, mission_arg, arduino_port_arg, lidar_port_arg,
         front_camera_arg, rear_camera_arg, show_arg, foxglove_port_arg,
+        calibrate_steering_arg,
         arduino_bridge, camera_publisher, rplidar, lidar_geometry, mission, foxglove_bridge,
     ])

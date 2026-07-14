@@ -11,6 +11,10 @@
 //     F            스티어링 모터 즉시 정지
 //   Arduino -> PC:
 //     0 / 1 / 2    상태 (정지/전진/후진)
+//     P <adc>      조향 POT 원시값(A2, 0~1023), 50ms마다 — 항상 보냄(미장착이면
+//                  플로팅값이라 의미 없는 숫자, 값 자체로 장착 여부 판단 불가).
+//                  전용 보드 아니고 이 메가에 직결 — 모터 제어와 같은 시리얼
+//                  왕복이라 캘리브레이션/향후 폐루프 조향에 지연 없이 바로 쓸 수 있음.
 
 const int LEFT_PWM = 4;
 const int LEFT_IN1 = 26;
@@ -24,11 +28,14 @@ const int STEER_PWM = 2;
 const int STEER_IN1 = 22;
 const int STEER_IN2 = 23;
 
+const int POT_PIN = A2;  // 조향 POT — 미장착이어도 analogRead는 안전(플로팅값만 나감)
+
 const int DEFAULT_SPEED = 100;
 const int STEER_SPEED = 160;
 const unsigned long STEER_PULSE_MS = 120;
 const unsigned long WATCHDOG_MS = 500;   // V 수신 후 시리얼 두절 시 정지
 const unsigned long STATUS_PRINT_MS = 100;
+const unsigned long POT_PRINT_MS = 50;
 
 bool canGo = false;
 int commandedSpeed = 0;      // 부호 있는 속도. V 명령 또는 레거시 G/2로 설정
@@ -38,6 +45,7 @@ unsigned long steerStartTime = 0;
 unsigned long lastSerialTime = 0;
 int lastState = -1;
 unsigned long lastStatusPrintTime = 0;
+unsigned long lastPotPrintTime = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -74,6 +82,7 @@ void loop() {
 
   setDrive(speed);
   printState(speed > 0 ? 1 : (speed < 0 ? 2 : 0));
+  printPot();
 }
 
 void readSerialCommand() {
@@ -174,5 +183,17 @@ void printState(int state) {
     Serial.println(state);
     lastState = state;
     lastStatusPrintTime = now;
+  }
+}
+
+void printPot() {
+  // POT 미장착이면 A2가 플로팅이라 값이 의미 없음 — 그래도 라인 자체는 계속
+  // 보낸다. "진짜 POT이 있는지"는 파이썬 쪽에서 풀락 스윕 중 실제로 값이
+  // 유의미하게 움직이는지로 판단한다(이 펌웨어는 하드웨어 유무를 모름).
+  unsigned long now = millis();
+  if (now - lastPotPrintTime >= POT_PRINT_MS) {
+    Serial.print("P ");
+    Serial.println(analogRead(POT_PIN));
+    lastPotPrintTime = now;
   }
 }
