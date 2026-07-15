@@ -34,7 +34,10 @@ colcon build --symlink-install --packages-up-to autodrive_skku_ros
 
 cd - >/dev/null
 echo "== rplidar-roboticia pip 갱신 (vendor/Function_Library.py 강제 임포트용) =="
-pip3 install --user -r requirements.txt
+# Ubuntu 24.04+ (Python 3.12)는 PEP 668로 시스템 pip 설치를 막는다(externally-managed-
+# environment). venv를 쓰면 colcon/rosidl이 이 venv의 python3를 집어써서 빌드가 깨지므로
+# (위 VIRTUAL_ENV 체크 참고) venv 대신 --break-system-packages로 우회한다.
+pip3 install --user --break-system-packages -r requirements.txt
 
 echo
 echo "완료 — 'source $WS_ROOT/install/setup.bash' 후 재실행하세요."
