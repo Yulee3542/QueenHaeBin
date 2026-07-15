@@ -11,7 +11,7 @@
 //     F            스티어링 모터 즉시 정지
 //   Arduino -> PC:
 //     0 / 1 / 2    상태 (정지/전진/후진)
-//     P <adc>      조향 POT 원시값(A2, 0~1023), 50ms마다 — 항상 보냄(미장착이면
+//     P <adc>      조향 POT 원시값(A0, 0~1023), 50ms마다 — 항상 보냄(미장착이면
 //                  플로팅값이라 의미 없는 숫자, 값 자체로 장착 여부 판단 불가).
 //                  전용 보드 아니고 이 메가에 직결 — 모터 제어와 같은 시리얼
 //                  왕복이라 캘리브레이션/향후 폐루프 조향에 지연 없이 바로 쓸 수 있음.
@@ -37,7 +37,7 @@ const int STEER_PWM = 2;
 const int STEER_IN1 = 23;
 const int STEER_IN2 = 22;
 
-const int POT_PIN = A2;  // 조향 POT — 미장착이어도 analogRead는 안전(플로팅값만 나감)
+const int POT_PIN = A0;  // 조향 POT (2026-07 실장착: A0) — 미장착이어도 analogRead는 안전(플로팅값만 나감)
 
 const int DEFAULT_SPEED = 100;
 const int STEER_SPEED = 160;
