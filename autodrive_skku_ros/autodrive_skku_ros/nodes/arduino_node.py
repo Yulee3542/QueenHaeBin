@@ -125,6 +125,25 @@ class ArduinoNode:
         if self._ser is not None:
             self._ser.close()
 
+    def _read_pot_median(self, duration, samples=5):
+        """duration 동안 samples번 나눠 읽어 중앙값을 반환.
+
+        조향 모터 펄스 직후 순간적으로 튀는 값(예: 349→356→349처럼 한 틱만
+        스파이크)이 스티어링 모터 노이즈로 ADC에 실릴 수 있어, 한 번만 읽는
+        대신 여러 번 읽어 중앙값을 쓰는 게 이상치에 더 강하다.
+        """
+        readings = []
+        step = duration / samples if samples > 0 else duration
+        for _ in range(max(samples, 1)):
+            time.sleep(step)
+            adc = self.pot_adc
+            if adc is not None:
+                readings.append(adc)
+        if not readings:
+            return None
+        readings.sort()
+        return readings[len(readings) // 2]
+
     def calibrate_steering(self, max_pulses=40, min_pulses=8, settle_s=0.18,
                             stable_count=3, stable_tol=1, min_span=3,
                             recenter_tol=1, pot_timeout_s=2.0):
@@ -161,8 +180,7 @@ class ArduinoNode:
             history = []
             for i in range(max_pulses):
                 self.steer_pulse(direction)
-                time.sleep(settle_s)
-                adc = self.pot_adc
+                adc = self._read_pot_median(settle_s)
                 if adc is None:
                     continue
                 history.append(adc)
