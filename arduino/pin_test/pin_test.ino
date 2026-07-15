@@ -11,23 +11,18 @@
 //       LEFT -> RIGHT -> STEER 순서로 1초씩 해당 모터가 도는지 눈으로 확인.
 
 const int LEFT_PWM = 4;
-// car_controller.ino와 동일한 보정 — 2026-07 실측 결과 LEFT도 후진으로 관측돼
-// IN1/IN2를 소프트웨어에서 뒤바꿈(배선은 그대로).
-const int LEFT_IN1 = 27;
-const int LEFT_IN2 = 26;
+const int LEFT_IN1 = 26;
+const int LEFT_IN2 = 27;
 
 const int RIGHT_PWM = 3;
-// car_controller.ino와 동일한 보정 — 우측 모터가 좌측과 마주보게 장착돼 있어
-// IN1/IN2를 소프트웨어에서 뒤바꿔야 두 바퀴가 같은 방향(전진)으로 보인다
-// (2026-07 실측: 보정 전엔 LEFT 전진일 때 RIGHT가 후진으로 관측됨).
-const int RIGHT_IN1 = 25;
-const int RIGHT_IN2 = 24;
+const int RIGHT_IN1 = 24;
+const int RIGHT_IN2 = 25;
 
 const int STEER_PWM = 2;
-// car_controller.ino와 동일한 보정 — 2026-07 실측 결과 L 펄스가 기대와 반대
-// 방향으로 관측돼 IN1/IN2를 뒤바꿈.
-const int STEER_IN1 = 23;
-const int STEER_IN2 = 22;
+const int STEER_IN1 = 22;
+const int STEER_IN2 = 23;
+// 2026-07: 관측 기준이 흔들려 LEFT/RIGHT/STEER를 순차적으로 잘못 "보정"했다가
+// 운전자 시점으로 통일해 재확인 후 전부 원복함 — car_controller.ino 주석 참고.
 
 const int SPIN_MS = 1000;
 const int PAUSE_MS = 500;
