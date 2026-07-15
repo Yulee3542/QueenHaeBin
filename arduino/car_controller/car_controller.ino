@@ -17,8 +17,10 @@
 //                  왕복이라 캘리브레이션/향후 폐루프 조향에 지연 없이 바로 쓸 수 있음.
 
 const int LEFT_PWM = 4;
-const int LEFT_IN1 = 26;
-const int LEFT_IN2 = 27;
+// 2026-07 실측: teleop_node로 재확인 결과 LEFT도 기존 극성이 후진으로 나와
+// RIGHT와 동일하게 소프트웨어에서 IN1/IN2를 뒤바꿔 보정(배선은 그대로).
+const int LEFT_IN1 = 27;
+const int LEFT_IN2 = 26;
 
 const int RIGHT_PWM = 3;
 // 우측 모터는 좌측과 마주보게(대칭) 장착돼 있어, 같은 극성 명령을 줘도 두 모터
@@ -31,8 +33,9 @@ const int RIGHT_IN1 = 25;
 const int RIGHT_IN2 = 24;
 
 const int STEER_PWM = 2;
-const int STEER_IN1 = 22;
-const int STEER_IN2 = 23;
+// 2026-07 실측: L 펄스가 기대(좌)와 반대 방향으로 관측돼 IN1/IN2를 뒤바꿔 보정.
+const int STEER_IN1 = 23;
+const int STEER_IN2 = 22;
 
 const int POT_PIN = A2;  // 조향 POT — 미장착이어도 analogRead는 안전(플로팅값만 나감)
 
