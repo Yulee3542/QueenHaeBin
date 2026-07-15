@@ -15,8 +15,11 @@ const int LEFT_IN1 = 26;
 const int LEFT_IN2 = 27;
 
 const int RIGHT_PWM = 3;
-const int RIGHT_IN1 = 24;
-const int RIGHT_IN2 = 25;
+// car_controller.ino와 동일한 보정 — 우측 모터가 좌측과 마주보게 장착돼 있어
+// IN1/IN2를 소프트웨어에서 뒤바꿔야 두 바퀴가 같은 방향(전진)으로 보인다
+// (2026-07 실측: 보정 전엔 LEFT 전진일 때 RIGHT가 후진으로 관측됨).
+const int RIGHT_IN1 = 25;
+const int RIGHT_IN2 = 24;
 
 const int STEER_PWM = 2;
 const int STEER_IN1 = 22;

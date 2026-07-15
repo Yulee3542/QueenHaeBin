@@ -21,8 +21,14 @@ const int LEFT_IN1 = 26;
 const int LEFT_IN2 = 27;
 
 const int RIGHT_PWM = 3;
-const int RIGHT_IN1 = 24;
-const int RIGHT_IN2 = 25;
+// 우측 모터는 좌측과 마주보게(대칭) 장착돼 있어, 같은 극성 명령을 줘도 두 모터
+// 자체는 동일하게 회전하지만(둘 다 반시계 등) 바퀴 진행방향은 반대로 나온다
+// (2026-07 실측: RIGHT 채널이 LEFT와 같은 IN1/IN2 패턴에서 후진으로 관측됨).
+// 배선을 바꾸는 대신 IN1/IN2를 소프트웨어에서 뒤바꿔 보정 — 아래에서 이 두
+// 상수만 쓰면(RIGHT_IN1/RIGHT_IN2 직접 24/25로 다시 쓰지 말 것) 전진 명령이
+// 좌우 모두 실제 전진이 되도록 맞춰진다.
+const int RIGHT_IN1 = 25;
+const int RIGHT_IN2 = 24;
 
 const int STEER_PWM = 2;
 const int STEER_IN1 = 22;
