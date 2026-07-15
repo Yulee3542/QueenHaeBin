@@ -167,12 +167,17 @@ class ArduinoNode:
                 if len(history) >= stable_count and \
                         max(history[-stable_count:]) - min(history[-stable_count:]) <= stable_tol:
                     break
+            print(f"[arduino] {direction} 스윕: {len(history)}펄스, 기록={history}")
             return history[-1] if history else None
 
         adc_left = sweep("L")
         adc_right = sweep("R")
 
-        if adc_left is None or adc_right is None or abs(adc_left - adc_right) < min_span:
+        span = None if (adc_left is None or adc_right is None) else abs(adc_left - adc_right)
+        print(f"[arduino] 스윕 결과: adc_left={adc_left}, adc_right={adc_right}, "
+              f"span={span}, min_span={min_span}")
+
+        if adc_left is None or adc_right is None or span < min_span:
             print("[arduino] POT 값이 조향에 반응하지 않음(미장착 추정) — 캘리브레이션 스킵")
             self.steer("F")
             return None, None
