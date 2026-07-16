@@ -88,6 +88,12 @@ def _run_parking():
     return _load("smoke_test_missions").test_t_parking()
 
 
+def _run_tuning():
+    m = _load("smoke_test_tuning")
+    return all([m.test_flatten_coverage(), m.test_apply_identity(),
+                m.test_type_roundtrip()])
+
+
 MODULES = {
     "env": ("환경/하드웨어 점검 (패키지·카메라·시리얼)", _run_env),
     "lidar": ("라이다 후방 장착 지오메트리 + ROS LaserScan 변환 순수 함수", _run_lidar),
@@ -97,6 +103,7 @@ MODULES = {
     "traffic": ("traffic 미션 상태머신 (정지선/신호등)", _run_traffic),
     "road": ("road 미션 장애물 회피 차선 변경", _run_road),
     "parking": ("t_parking 미션 상태머신 end-to-end", _run_parking),
+    "tuning": ("ROS 파라미터 ↔ 튜닝 dict 바인딩 (flatten/apply, in-place 검증)", _run_tuning),
 }
 
 

@@ -153,6 +153,12 @@ def ros_main(args=None):
         def __init__(self):
             super().__init__("lidar_geometry_node")
 
+            # 라이다 장착 캘리브레이션(yaw_offset_deg/invert 등)을 ros2 param set으로
+            # 라이브 조정 가능하게 노출. 같은 값을 mission_node도 자체 프로세스
+            # 사본으로 읽으므로, 캘리브레이션 확정 시 양쪽 노드에 같이 set할 것.
+            from .. import tuning
+            tuning.install(self, tuning.lidar_tunable_dicts(), tuning.lidar_tunable_attrs())
+
             self.create_subscription(LaserScan, "/scan", self._on_scan, 10)
             self._rear_min_pub = self.create_publisher(Float32, "/lidar/rear_min_m", 10)
             self._corrected_pub = self.create_publisher(LaserScan, "/lidar/scan_corrected", 10)

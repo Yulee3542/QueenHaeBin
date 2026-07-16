@@ -20,7 +20,7 @@ try:
 except ImportError:
     cv2 = None
 
-from .. import config
+from .. import config, tuning
 from ..missions import MISSIONS
 from .arduino_node import STATE_UNKNOWN
 from .lidar_node import laserscan_msg_to_tuples
@@ -144,6 +144,12 @@ class MissionNode(Node):
 
         self._car = RosCarProxy(self)
         self._show = self.get_parameter("show").value
+
+        # 실차 튜닝 파라미터 — 미션이 매 틱 읽는 튜닝 dict를 ros2 param set으로
+        # 라이브 조정할 수 있게 노출한다 (미션 선택과 무관하게 전부 선언 —
+        # 안 쓰는 namespace는 그냥 무해하다). on_start() 전에 설치해야
+        # tuning_params:= 로 들어온 기동 시점 override가 미션 시작값에 반영된다.
+        tuning.install(self, tuning.tunable_dicts(), tuning.tunable_attrs())
 
         mission_name = resolve_mission(self)
         self.get_logger().info(f"mission={mission_name}")
