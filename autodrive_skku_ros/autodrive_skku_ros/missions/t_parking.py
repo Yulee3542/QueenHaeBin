@@ -10,6 +10,7 @@ except ImportError:
     np = None
 
 from .base import Mission, traveled_m
+from .lane_follow import LaneCenterTracker, follow_lane_poi
 from .occupancy import OccupancyMap
 from .. import config as _config
 from ..nodes.lidar_node import filter_self, rear_min_m
@@ -37,6 +38,15 @@ T_PARKING = dict(
     occ_size_m=8.0,        # 격자 한 변 (미션 시작 pose가 중앙)
     occ_res_m=0.05,        # 셀 크기
     occ_min_hits=2,        # 이 이상 히트여야 점유 확정 (1회 노이즈 걸러냄)
+    # 출차 (규정: 3~5초 정지 후 출차해 반대편 OUT 통과 — 출차실패 f7 -30,
+    # OUT 도착실패 f8 -40). 진입 기동을 전진으로 되짚는 타이밍 미러 + 파라미터.
+    exit_enabled=True,     # False면 HOLD 후 DONE(정지)만 — 기존 동작
+    exit_mode="lane",      # "lane"=출차 후 차선유지로 OUT까지 주행(규정 기본) | "stop"=출차 후 정지
+    exit_creep_s=3.0,      # 진입 CREEP 실측 기록이 없을 때의 전진 이탈 시간 폴백
+    exit_margin_s=0.5,     # 전진 이탈 시간 여유 (진입보다 살짝 더 나감)
+    exit_turn_s=2.0,       # 진입 방향과 같은 조향으로 호를 되짚는 구간
+    exit_straight_s=1.0,   # 반대 조향으로 차체 재정렬 구간
+    exit_max_s=15.0,       # EXIT 전체 안전 타임아웃 (park_max_s 패턴)
 )
 
 
@@ -44,19 +54,22 @@ class TParkingMission(Mission):
     """3. T 주차
 
     목표 (전부 테스트 구현 — 타이밍/임계값은 실차 튜닝 대상):
-      (1) 라이다 기반 맵 빌딩          — 스캔 누적 (map_scans회)
+      (1) 라이다 기반 맵 빌딩          — 스캔 누적 + 점유 격자(오도메트리 가용 시)
       (2) 후방 카메라 기반 주차선 인식  — 흰 주차선 2줄 컬럼 히스토그램
       (3) 차선 인식 도로 주행 (후진)    — reverse_lane_steer (후진 조향 반전)
       (4) T주차 알고리즘에 따른 주차    — PARK 서브 페이즈 기동 시퀀스
+      (5) 출차 후 OUT 통과            — EXIT 서브 페이즈 (규정 f7/f8)
 
-    상태머신: MAP_BUILD → FIND_SLOT → REVERSE_ALIGN → PARK → DONE
-    PARK 내부 서브 페이즈: TURN_IN → STRAIGHTEN → CREEP → HOLD
-    오도메트리가 없어 라이다 스캔 + 후방 카메라 + 타이머만으로 동작한다.
+    상태머신: MAP_BUILD → FIND_SLOT → REVERSE_ALIGN → PARK → EXIT → LANE_FOLLOW|DONE
+      PARK 서브 페이즈: TURN_IN → STRAIGHTEN → CREEP → HOLD
+      EXIT 서브 페이즈: EXIT_CREEP → EXIT_TURN → EXIT_STRAIGHT
+    출차는 진입 기동을 전진으로 되짚는 타이밍 미러: 전진으로 같은 호를
+    되짚으려면 진입 TURN_IN과 "같은 방향" 조향이 맞다 (후진 좌조향 호 =
+    전진 좌조향 호). exit_mode="lane"이면 재정렬 후 차선유지로 OUT까지 주행
+    (종료는 규정대로 운영자 키 입력), "stop"이면 정지(DONE).
 
     라이다는 후방 장착(0도=차량 후방)이라 후진 방향이 정확히 주 시야다 —
     슬롯 탐지(측면 갭)와 주차 완료(후방 거리) 판정 모두 라이다 담당.
-    출차(pull-out)는 이 상태머신 범위 외 — 후속 과제 (시뮬 parking_mission의
-    EXIT 페이즈 프로토타입 참고).
     """
 
     name = "t_parking"
@@ -80,6 +93,8 @@ class TParkingMission(Mission):
         self._park_pose0 = None     # 서브 페이즈 시작 pose (오도메트리 가용 시)
         self._creep_s_actual = None  # CREEP 실제 소요 시간 — 출차 미러링 기준
         self._creep_m_actual = None  # CREEP 실제 이동 거리 (pose_conf 충족 시)
+        self._exit_t_start = 0.0    # EXIT 전체 타임아웃 기준 시각
+        self._lane_tracker = LaneCenterTracker()  # 출차 후 LANE_FOLLOW용
         car.go()
 
     def step(self, sensors, car):
@@ -107,6 +122,16 @@ class TParkingMission(Mission):
 
         elif self.state == "PARK":
             self._park_tick(sensors, car)
+
+        elif self.state == "EXIT":
+            self._exit_tick(sensors, car)
+
+        elif self.state == "LANE_FOLLOW":
+            # (5단계) 출차 완료 — 차선유지로 OUT 영역까지 주행. 규정상 종료는
+            # 운영자 키 입력이므로 이 상태에 터미널 조건은 없다.
+            car.drive(self.config.DRIVE_SPEED)
+            self.debug["lane_poi"] = follow_lane_poi(
+                self._lane_tracker, car, sensors.get("bottom"))
 
         else:  # DONE
             car.stop()
@@ -175,7 +200,61 @@ class TParkingMission(Mission):
         elif self._park_phase == "HOLD":
             car.drive(0)  # 주차 완료 정지 유지 (규정 3~5초)
             if in_phase >= self.p["hold_s"]:
-                self.state = "DONE"
+                if self.p["exit_enabled"]:
+                    self.state = "EXIT"
+                    self._park_phase = None  # _exit_tick이 EXIT_CREEP부터 시작
+                else:
+                    self.state = "DONE"
+
+    # ---- (5단계) 출차 기동 시퀀스 — 진입 미러 서브 페이즈 머신 ----
+
+    def _finish_exit(self, car):
+        car.steer("F")
+        if self.p["exit_mode"] == "lane":
+            self.state = "LANE_FOLLOW"
+            car.drive(self.config.DRIVE_SPEED)
+        else:
+            self.state = "DONE"
+            car.stop()
+
+    def _exit_tick(self, sensors, car):
+        now = self._now()
+        if self._park_phase is None:
+            self._exit_t_start = now
+            self._park_enter("EXIT_CREEP", now, self._trusted_pose(sensors))
+        in_phase = now - self._park_t0
+        # 진입과 같은 방향: 후진 좌조향으로 그린 호는 전진 좌조향으로 되짚는다
+        turn_dir = "L" if self.p["side"] == "R" else "R"
+        counter = "R" if turn_dir == "L" else "L"
+
+        if now - self._exit_t_start >= self.p["exit_max_s"]:
+            print("[t_parking] EXIT 타임아웃 — 안전 종료")
+            self._finish_exit(car)
+            return
+
+        if self._park_phase == "EXIT_CREEP":
+            # 진입 CREEP의 실측(시간/거리)만큼 + 여유로 전진해 슬롯을 벗어난다
+            car.drive(self.config.SLOW_SPEED)
+            car.steer("F")
+            done = in_phase >= (self._creep_s_actual or self.p["exit_creep_s"]) \
+                + self.p["exit_margin_s"]
+            if not done and self._creep_m_actual:
+                d = traveled_m(self._park_pose0, self._trusted_pose(sensors))
+                done = d is not None and d >= self._creep_m_actual
+            if done:
+                self._park_enter("EXIT_TURN", now, self._trusted_pose(sensors))
+
+        elif self._park_phase == "EXIT_TURN":
+            car.drive(self.config.SLOW_SPEED)
+            self._park_pulse(car, turn_dir, self.p["turn_in_pulses"], now)
+            if in_phase >= self.p["exit_turn_s"]:
+                self._park_enter("EXIT_STRAIGHT", now, self._trusted_pose(sensors))
+
+        elif self._park_phase == "EXIT_STRAIGHT":
+            car.drive(self.config.SLOW_SPEED)
+            self._park_pulse(car, counter, self.p["turn_in_pulses"], now)
+            if in_phase >= self.p["exit_straight_s"]:
+                self._finish_exit(car)
 
     # ---- 판정 로직 ----
 

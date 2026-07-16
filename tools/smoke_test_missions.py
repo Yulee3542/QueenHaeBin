@@ -323,20 +323,83 @@ def test_t_parking():
         clk.advance(0.1)
         m.step(sensors(rear=rear_lines_frame(140, 340)), car)  # 중점 240 = 중앙
     ok &= check("정렬 연속 판정 → PARK", m.state == "PARK")
+    n_drives_at_park = len(car.drives)
 
     parked_scan = [(15, 0, 200)]  # 후방 0.275m (뒤범퍼 기준) <= rear_stop_m
-    for _ in range(300):
-        if m.state == "DONE":
+    for _ in range(400):
+        if m.state == "LANE_FOLLOW":
             break
         clk.advance(0.2)
         m.step(sensors(rear=rear_lines_frame(140, 340), scan=parked_scan), car)
-    ok &= check("PARK 기동 완료 → DONE", m.state == "DONE")
-    ok &= check("TURN_IN 'L' 펄스 발생 (side='R' 후진 진입)", "L" in car.pulses)
-    ok &= check("STRAIGHTEN 'R' 펄스 발생", "R" in car.pulses)
+    ok &= check("PARK→HOLD→EXIT 완료 → LANE_FOLLOW (exit_mode='lane' 기본)",
+                m.state == "LANE_FOLLOW")
+    # 펄스 순서: 진입 TURN_IN(L)→STRAIGHTEN(R) 후 출차 EXIT_TURN(같은 L)→
+    # EXIT_STRAIGHT(R) — 전진으로 같은 호를 되짚으므로 진입과 같은 방향이 맞다
+    n = p["turn_in_pulses"]
+    expected = ["L"] * n + ["R"] * n + ["L"] * n + ["R"] * n
+    ok &= check(f"펄스 시퀀스 진입/출차 미러 {expected} 일치", car.pulses == expected)
     ok &= check("후진 구동 발생", any(v < 0 for v in car.drives))
+    ok &= check("PARK 이후 출차 전진 구동 발생",
+                any(v > 0 for v in car.drives[n_drives_at_park:]))
 
-    m.step(sensors(), car)
-    ok &= check("DONE에서 stop() 호출", ("stop", None) in car.calls)
+    m.step(sensors(bottom=blank()), car)
+    ok &= check("LANE_FOLLOW에서 주행 유지 (DRIVE_SPEED)",
+                car.drives[-1] == config.DRIVE_SPEED)
+    return ok
+
+
+def _t_parking_at_hold():
+    """HOLD 상태의 미션을 만들어주는 헬퍼 — EXIT 분기 테스트용."""
+    m, car, clk = TParkingMission(), FakeCar(), FakeClock()
+    m.on_start(car, config)
+    m._now = clk
+    m.state = "PARK"
+    m._park_enter("HOLD", clk.t)
+    return m, car, clk
+
+
+def test_t_parking_exit_disabled():
+    print("== t_parking 출차 비활성 (exit_enabled=False → 기존 동작) ==")
+    ok = True
+    orig = T_PARKING["exit_enabled"]
+    try:
+        T_PARKING["exit_enabled"] = False
+        m, car, clk = _t_parking_at_hold()
+        clk.advance(T_PARKING["hold_s"] + 0.1)
+        m.step(sensors(), car)
+        ok &= check("HOLD 완료 → 바로 DONE", m.state == "DONE")
+        m.step(sensors(), car)
+        ok &= check("DONE에서 stop() 호출", ("stop", None) in car.calls)
+        ok &= check("전진 구동 없음 (출차 안 함)", not any(v > 0 for v in car.drives))
+    finally:
+        T_PARKING["exit_enabled"] = orig
+    return ok
+
+
+def test_t_parking_exit_stop_mode():
+    print("== t_parking 출차 stop 모드 (출차 후 정지) ==")
+    ok = True
+    orig = T_PARKING["exit_mode"]
+    try:
+        T_PARKING["exit_mode"] = "stop"
+        m, car, clk = _t_parking_at_hold()
+        clk.advance(T_PARKING["hold_s"] + 0.1)
+        m.step(sensors(), car)
+        ok &= check("HOLD 완료 → EXIT", m.state == "EXIT")
+        for _ in range(400):
+            if m.state == "DONE":
+                break
+            clk.advance(0.2)
+            m.step(sensors(), car)
+        ok &= check("EXIT 완료 → DONE (stop 모드)", m.state == "DONE")
+        n = T_PARKING["turn_in_pulses"]
+        ok &= check("출차 펄스 순서 turn_dir(L)→counter(R)",
+                    car.pulses == ["L"] * n + ["R"] * n)
+        ok &= check("출차 중 전진 구동", any(v > 0 for v in car.drives))
+        m.step(sensors(), car)
+        ok &= check("DONE에서 stop() 호출", ("stop", None) in car.calls)
+    finally:
+        T_PARKING["exit_mode"] = orig
     return ok
 
 
@@ -376,6 +439,8 @@ def main():
         test_lane_change_distance_mode(),
         test_t_parking(),
         test_t_parking_occupancy(),
+        test_t_parking_exit_disabled(),
+        test_t_parking_exit_stop_mode(),
     ]
     passed = all(results)
     print("\n결과:", "이상 없음" if passed else "위 [X] 항목 확인 필요")

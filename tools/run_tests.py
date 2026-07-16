@@ -87,7 +87,8 @@ def _run_road():
 
 def _run_parking():
     m = _load("smoke_test_missions")
-    return all([m.test_t_parking(), m.test_t_parking_occupancy()])
+    return all([m.test_t_parking(), m.test_t_parking_occupancy(),
+                m.test_t_parking_exit_disabled(), m.test_t_parking_exit_stop_mode()])
 
 
 def _run_occupancy_grid():
