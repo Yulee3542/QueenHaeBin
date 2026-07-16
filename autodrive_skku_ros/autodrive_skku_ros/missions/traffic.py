@@ -7,18 +7,21 @@ except ImportError:
 
 from .base import Mission
 from .lane_follow import follow_lane, LANE_EDGE
+from .. import config as _config
+
+# vendor 미설치 개발 환경용 폴백 상수 복사본. vendor 파일은 수정 금지(대회 규정)라
+# 자동 동기화 불가 — tools/smoke_test_missions.py의 test_vendor_fallback_sync가
+# vendor import 가능 환경에서 이 값과 vendor 값의 일치를 검증한다.
+_FALLBACK = dict(RED=0, GREEN=1, HUE_THRESHOLD=([4, 176], [40, 80]), SATURATION=150)
 
 try:
     from ..vendor import Function_Library as fl
     from ..vendor.Function_Library import HUE_THRESHOLD, SATURATION, RED, GREEN
 except ImportError:  # 패키지 미설치 개발 환경 — 검증된 상수값만 복사해 사용
     fl = None
-    RED, GREEN = 0, 1
-    HUE_THRESHOLD = ([4, 176], [40, 80])
-    SATURATION = 150
-    # ⚠ 위 값은 vendor/Function_Library.py의 동일 이름 상수와 반드시 일치해야 함.
-    # vendor 파일은 수정 금지(대회 규정)라 자동 동기화 불가 — Function_Library.py가
-    # 업데이트되면 이 폴백 값도 수동으로 다시 확인할 것.
+    RED, GREEN = _FALLBACK["RED"], _FALLBACK["GREEN"]
+    HUE_THRESHOLD = _FALLBACK["HUE_THRESHOLD"]
+    SATURATION = _FALLBACK["SATURATION"]
 
 
 # ---------------- 튜닝 파라미터 ----------------
@@ -27,10 +30,10 @@ TRAFFIC_PIXEL_RATIO = 0.005
 
 # 정지선(흰색) 인식 (traffic 미션 ①). row_fill 0.7: 횡단보도(진행방향 줄무늬,
 # 폭 점유 ~60%)와 세로 차선이 행 채움비를 못 넘게 하는 값.
-# 📏 t_parking.py의 PARKING_LINE_WHITE(s_max/v_min)가 여기 값과 반드시 일치해야
-# 함(후방캠 주차선도 같은 흰색 규격) — 바꾸면 그쪽도 확인할 것.
+# 흰색 임계는 config.WHITE_HSV(단일 소스) 사용 — 정지선만 다르게 찍히면
+# white_s_max/white_v_min override로 개별 조정.
 STOP_LINE = dict(
-    s_max=60, v_min=180,   # HSV 흰색
+    white_s_max=None, white_v_min=None,  # None=config.WHITE_HSV 공유값 사용
     roi_top=0.55,          # bottom 프레임에서 이 비율 아래 행만 검사 (가까운 노면)
     row_fill=0.7,          # 행 폭 대비 흰 픽셀 비율 임계
     min_rows=6,            # 연속으로 임계를 넘어야 하는 행 수
@@ -139,10 +142,11 @@ class TrafficMission(Mission):
             return False
         try:
             sl = STOP_LINE
+            s_max, v_min = _config.white_hsv(sl)
             h, w = bottom_frame.shape[:2]
             roi = bottom_frame[int(h * sl["roi_top"]):, :]
             hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            mask = cv2.inRange(hsv, (0, 0, sl["v_min"]), (179, sl["s_max"], 255))
+            mask = cv2.inRange(hsv, (0, 0, v_min), (179, s_max, 255))
             row_frac = mask.sum(axis=1) / (255.0 * w)
             run = 0
             for f in row_frac:

@@ -10,11 +10,13 @@ except ImportError:
     np = None
 
 from .base import Mission
+from .. import config as _config
 from ..nodes.lidar_node import filter_self, rear_min_m
 
 
 # ---------------- 튜닝 파라미터 ----------------
 # T주차 (t_parking 미션) — 주차칸 950x1500mm(규정), 완료 후 3~5초 정지(규정) 기준.
+# 흰색 임계는 config.WHITE_HSV(단일 소스), 펄스 간격은 config.STEER_PULSE_GAP_S 사용.
 T_PARKING = dict(
     side="R",              # 주차 슬롯이 있는 쪽 ('L'/'R') — 당일 코스 확인 후 설정
     map_scans=30,          # MAP_BUILD에서 누적할 스캔 수
@@ -28,16 +30,8 @@ T_PARKING = dict(
     rear_stop_m=0.30,      # 후방 이 거리 이내면 주차 완료 (뒤 범퍼 기준)
     hold_s=4.0,            # 완료 후 정지 유지 (규정 3~5초)
     park_max_s=12.0,       # PARK 상태 안전 타임아웃
+    white_s_max=None, white_v_min=None,  # 주차선 흰색 override (None=config.WHITE_HSV)
 )
-
-# 📏 traffic.py의 STOP_LINE(s_max/v_min)과 반드시 일치해야 함 — 후방캠 주차선도
-# 같은 흰색 규격(대회 규정)이라 두 파일이 같은 값을 쓴다. traffic.py 값이 바뀌면
-# 여기도 확인할 것.
-PARKING_LINE_WHITE = dict(s_max=60, v_min=180)
-
-# 📏 road.py의 LANE_CHANGE['pulse_gap_s']와 동일해야 함 — 둘 다 steer_pulse() 반복
-# 전송 주기이므로 값을 따로 튜닝할 이유가 없다. road.py 값이 바뀌면 여기도 확인할 것.
-PARK_PULSE_GAP_S = 0.15
 
 
 class TParkingMission(Mission):
@@ -115,7 +109,7 @@ class TParkingMission(Mission):
 
     def _park_pulse(self, car, direction, target, now):
         # 펄스 간격은 차선 변경과 동일한 값 공유 (steer_pulse 반복 전송 주기)
-        gap = PARK_PULSE_GAP_S
+        gap = _config.STEER_PULSE_GAP_S
         if self._park_pulses < target and now - self._park_last_pulse >= gap:
             car.steer_pulse(direction)
             self._park_pulses += 1
@@ -209,11 +203,11 @@ class TParkingMission(Mission):
         if cv2 is None or rear_frame is None:
             return None
         try:
-            sl = PARKING_LINE_WHITE  # 흰색 임계 공유 (s_max/v_min)
+            s_max, v_min = _config.white_hsv(self.p)  # 흰색 임계 (config.WHITE_HSV 공유)
             h, w = rear_frame.shape[:2]
             roi = rear_frame[h // 2:, :]
             hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            mask = cv2.inRange(hsv, (0, 0, sl["v_min"]), (179, sl["s_max"], 255))
+            mask = cv2.inRange(hsv, (0, 0, v_min), (179, s_max, 255))
             col_sum = mask.sum(axis=0).astype(float)
             if col_sum.max() <= 0:
                 self._last_err_px = None

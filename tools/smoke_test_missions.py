@@ -27,6 +27,7 @@ except ImportError as e:
     sys.exit(1)
 
 from autodrive_skku_ros import config
+from autodrive_skku_ros.missions import traffic as traffic_mod
 from autodrive_skku_ros.missions.road import RoadMission, detect_obstacle_ahead, OBSTACLE_CAM, LANE_CHANGE
 from autodrive_skku_ros.missions.traffic import TrafficMission, STOP_LINE
 from autodrive_skku_ros.missions.t_parking import TParkingMission, T_PARKING
@@ -158,6 +159,29 @@ def test_white_discrimination():
     return ok
 
 
+# ---- 1b. vendor 폴백 상수 동기화 가드 ----
+
+def test_vendor_fallback_sync():
+    """traffic.py의 vendor 폴백 복사본(_FALLBACK)이 실제 vendor 상수와 일치하는지.
+    vendor 파일은 수정 금지라 자동 동기화가 불가능해 이 가드로 드리프트를 잡는다.
+    vendor 미설치 환경에서는 검증할 대상이 없으므로 통과 처리."""
+    print("== vendor 폴백 상수 동기화 ==")
+    if traffic_mod.fl is None:
+        print("  [OK] vendor 미설치 환경 — 폴백 자체가 사용 중, 비교 생략")
+        return True
+    from autodrive_skku_ros.vendor import Function_Library as v
+    fb = traffic_mod._FALLBACK
+    ok = True
+    ok &= check("RED/GREEN 인덱스 일치", (v.RED, v.GREEN) == (fb["RED"], fb["GREEN"]))
+    # vendor HUE_THRESHOLD는 4색(RED/GREEN/BLUE/YELLOW) 튜플이지만 traffic은
+    # RED/GREEN만 쓰므로 그 두 항목만 일치하면 된다.
+    ok &= check("HUE_THRESHOLD[RED/GREEN] 일치",
+                list(v.HUE_THRESHOLD[v.RED]) == list(fb["HUE_THRESHOLD"][fb["RED"]]) and
+                list(v.HUE_THRESHOLD[v.GREEN]) == list(fb["HUE_THRESHOLD"][fb["GREEN"]]))
+    ok &= check("SATURATION 일치", v.SATURATION == fb["SATURATION"])
+    return ok
+
+
 # ---- 2. traffic 미션 FSM (정지선 대기 / 교착 가드 / 빨간불 / cooldown) ----
 
 def test_traffic_fsm():
@@ -278,6 +302,7 @@ def test_t_parking():
 def main():
     results = [
         test_white_discrimination(),
+        test_vendor_fallback_sync(),
         test_traffic_fsm(),
         test_road_lane_change(),
         test_t_parking(),

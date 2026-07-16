@@ -7,6 +7,7 @@ except ImportError:
 
 from .base import Mission
 from .lane_follow import LaneCenterTracker, follow_lane_poi, LANE_POI
+from .. import config as _config
 from ..nodes.lidar_node import side_clearance_m
 
 
@@ -14,8 +15,10 @@ from ..nodes.lidar_node import side_clearance_m
 # 전방 장애물(흰색 장애물 차량) 카메라 감지 — road 미션 ④.
 # 대회 규격: 장애물 차량·정지선·실선/점선 모두 흰색 → 형태로 구분한다.
 # (차선=가늘고 세로로 김, 정지선=가로로 얇은 밴드, 장애물=폭·높이 모두 큰 블롭)
+# 흰색 임계는 config.WHITE_HSV(단일 소스) 사용 — 장애물 차량 도색이 페인트
+# 차선과 다르게 찍히면 white_s_max/white_v_min override로 개별 조정.
 OBSTACLE_CAM = dict(
-    s_max=60, v_min=180,        # HSV 흰색: 채도 낮고 밝기 높음
+    white_s_max=None, white_v_min=None,  # None=config.WHITE_HSV 공유값 사용
     roi_top=0.35, roi_bottom=0.95,   # bottom 프레임 세로 ROI (비율)
     col_lo=0.20, col_hi=0.80,   # 중앙 컬럼 밴드 — 우리 차선의 장애물만
     min_area_ratio=0.04,        # ROI 면적 대비 블롭 면적비 임계
@@ -26,11 +29,9 @@ OBSTACLE_CAM = dict(
 
 # 차선 변경 기동 (road 미션 ③④) — 펄스(120ms)↔조향각 매핑 미측정, 전부 실차 튜닝 대상.
 # 근거: 조향 ±20도 → 회전반경 L/tan20 ≈ 1.5m, 차선폭 0.85m → S자 각 구간 헤딩 ~40도.
-# 📏 t_parking.py의 PARK_PULSE_GAP_S가 이 dict의 pulse_gap_s와 동일해야 함 — 값을
-# 바꾸면 그쪽도 확인할 것.
+# 펄스 간격은 config.STEER_PULSE_GAP_S(단일 소스, t_parking과 공유) 사용.
 LANE_CHANGE = dict(
     pulses=4,          # 진입/복귀 조향 펄스 횟수
-    pulse_gap_s=0.15,  # 펄스 간 최소 간격 (steer_pulse 반복 전송 주기)
     out_s=1.5,         # 옆 차선으로 나가는 구간 지속 시간
     back_s=1.5,        # 반대 조향으로 차선 정렬하는 구간
     straight_s=0.8,    # 직진 안정화 구간
@@ -50,12 +51,13 @@ def detect_obstacle_ahead(frame, cam_cfg):
     if cv2 is None or frame is None:
         return False
     try:
+        s_max, v_min = _config.white_hsv(cam_cfg)
         h, w = frame.shape[:2]
         y0, y1 = int(h * cam_cfg["roi_top"]), int(h * cam_cfg["roi_bottom"])
         x0, x1 = int(w * cam_cfg["col_lo"]), int(w * cam_cfg["col_hi"])
         roi = frame[y0:y1, x0:x1]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, (0, 0, cam_cfg["v_min"]), (179, cam_cfg["s_max"], 255))
+        mask = cv2.inRange(hsv, (0, 0, v_min), (179, s_max, 255))
         rh, rw = mask.shape[:2]
         num, _labels, stats, _cents = cv2.connectedComponentsWithStats(mask, connectivity=8)
         for i in range(1, num):
@@ -158,8 +160,8 @@ class RoadMission(Mission):
         self._lc_last_pulse = 0.0
 
     def _lc_pulse(self, car, direction, target, now):
-        lc = LANE_CHANGE
-        if self._lc_pulses < target and now - self._lc_last_pulse >= lc["pulse_gap_s"]:
+        if self._lc_pulses < target and \
+                now - self._lc_last_pulse >= _config.STEER_PULSE_GAP_S:
             car.steer_pulse(direction)
             self._lc_pulses += 1
             self._lc_last_pulse = now
