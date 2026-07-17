@@ -25,7 +25,8 @@ except ImportError as e:
     sys.exit(1)
 
 from autodrive_skku_ros.missions.lane_follow import (
-    follow_lane, analyze_lane_poi, LANE_POI, _fit_lane_circle, _circle_x_at_y)
+    follow_lane, analyze_lane_poi, LANE_POI, _fit_lane_circle, _circle_x_at_y,
+    _classify_lane_type, _poi_pick_right_lane_center)
 from autodrive_skku_ros.vendor import Function_Library as fl
 
 
@@ -170,6 +171,72 @@ def test_analyze_lane_poi_straight_unaffected():
     return ok
 
 
+def _make_column_mask(height=100, width=300, columns=None):
+    """columns: {center_x: [(row_lo, row_hi), ...]} — 각 컬럼(±15px 밴드)의
+    켜진 행 구간을 지정해 실선/점선/미확정 패턴을 합성한다."""
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for cx, runs in (columns or {}).items():
+        x0, x1 = max(0, cx - 15), min(width, cx + 15)
+        for r0, r1 in runs:
+            mask[r0:r1, x0:x1] = 255
+    return mask
+
+
+def test_classify_lane_type():
+    print("== _classify_lane_type (팀원 C920 분류기 이식) ==")
+    ok = True
+    cfg = dict(LANE_POI)
+
+    solid_mask = _make_column_mask(columns={50: [(0, 100)]})
+    ok &= check("전체 높이 연속 -> solid",
+                _classify_lane_type(solid_mask, 50, cfg) == "solid")
+
+    dashed_mask = _make_column_mask(
+        columns={50: [(0, 10), (20, 30), (40, 50), (60, 70), (80, 90)]})
+    ok &= check("주기적 구간(런 5개, 커버리지 50%) -> dashed",
+                _classify_lane_type(dashed_mask, 50, cfg) == "dashed")
+
+    none_mask = _make_column_mask(columns={})
+    ok &= check("빈 컬럼 -> none",
+                _classify_lane_type(none_mask, 50, cfg) == "none")
+
+    unknown_mask = _make_column_mask(columns={50: [(25, 75)]})  # 런 1개, 커버리지 50%
+    ok &= check("연속 1구간(50% 커버리지, solid/dashed 기준 다 못 넘음) -> unknown",
+                _classify_lane_type(unknown_mask, 50, cfg) == "unknown")
+    return ok
+
+
+def test_poi_pick_right_lane_center_classification():
+    """핵심 검증: 위치(순서)만 보는 기존 휴리스틱과 실제로 다른 답을 내는
+    시나리오 — 가장 오른쪽 클러스터가 '실선처럼 안 생겼으면' 무시하고 진짜
+    실선을 찾아야 한다."""
+    print("== _poi_pick_right_lane_center — 분류 기반이 위치 휴리스틱과 갈리는 경우 ==")
+    ok = True
+    cfg = dict(LANE_POI)
+    # x=50: dashed(런5개), x=150: solid(전체 연속), x=250: 연속 1구간(50%) -> unknown
+    binary_full = _make_column_mask(columns={
+        50: [(0, 10), (20, 30), (40, 50), (60, 70), (80, 90)],
+        150: [(0, 100)],
+        250: [(25, 75)],
+    })
+    clusters = [(50, 100, 45, 55), (150, 100, 145, 155), (250, 100, 245, 255)]
+
+    old_heuristic = (clusters[-2][0] + clusters[-1][0]) / 2.0  # (150+250)/2=200
+    new_result = _poi_pick_right_lane_center(clusters, binary_full, cfg)
+    expected = 50 + 0.75 * (150 - 50)  # dashed(50)~solid(150) 3/4 지점 = 125
+
+    ok &= check(f"분류 기반 결과({new_result})가 위치 휴리스틱({old_heuristic})과 다름",
+                new_result != old_heuristic)
+    ok &= check(f"진짜 dashed(50)~solid(150) 3/4 지점(~{expected}) 채택",
+                new_result is not None and abs(new_result - expected) < 1e-6)
+
+    # binary_full/cfg 없이 호출하면(하위 호환) 기존 위치 휴리스틱 그대로
+    fallback = _poi_pick_right_lane_center(clusters)
+    ok &= check("binary_full 없이 호출 -> 기존 위치 휴리스틱으로 100% 폴백",
+                fallback == old_heuristic)
+    return ok
+
+
 def main():
     results = [
         test_follow_lane_no_crash(),
@@ -177,6 +244,8 @@ def main():
         test_circle_x_at_y(),
         test_fit_lane_circle(),
         test_analyze_lane_poi_straight_unaffected(),
+        test_classify_lane_type(),
+        test_poi_pick_right_lane_center_classification(),
     ]
     passed = all(results)
     print("\n결과:", "이상 없음" if passed else "위 [X] 항목 확인 필요")
