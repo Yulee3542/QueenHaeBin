@@ -7,6 +7,7 @@ core/ros_main() 분리와 --selftest를 두지 않는다. 이 오케스트레이
 (FakeCar/FakeClock로 ROS 없이 각 미션 FSM을 직접 구동) 참고.
 """
 import math
+import os
 import sys
 
 import numpy as np
@@ -161,6 +162,17 @@ class MissionNode(Node):
 
         self._car = RosCarProxy(self)
         self._show = self.get_parameter("show").value
+        # show:=true인데 DISPLAY가 없으면(SSH/헤드리스) cv2.imshow()가 Qt
+        # xcb 플러그인을 못 찾아 프로세스 전체를 abort(exit -6)시킨다 —
+        # 2026-07-17 실차 로그로 확인된 크래시. 여기서 미리 걸러 경고만
+        # 남기고 끈다(show_frames()의 기존 'q' 입력 시 자동 off 로직은
+        # imshow가 이미 죽은 뒤라 발동할 기회가 없었음).
+        if self._show and cv2 is not None and not os.environ.get("DISPLAY"):
+            self.get_logger().warn(
+                "show:=true지만 DISPLAY 환경변수가 없습니다(SSH/헤드리스 추정) — "
+                "cv2.imshow()가 프로세스를 죽이므로 카메라 미리보기를 끕니다. "
+                "미리보기가 필요하면 'ssh -X'나 VNC 등으로 X 디스플레이를 연결하세요.")
+            self._show = False
 
         # 실차 튜닝 파라미터 — 미션이 매 틱 읽는 튜닝 dict를 ros2 param set으로
         # 라이브 조정할 수 있게 노출한다 (미션 선택과 무관하게 전부 선언 —
