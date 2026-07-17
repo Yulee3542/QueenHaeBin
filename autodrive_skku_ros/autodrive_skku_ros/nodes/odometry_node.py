@@ -239,7 +239,7 @@ def ros_main(args=None):
     from std_msgs.msg import Float32, Int8, Int16, Int32, String
     from geometry_msgs.msg import PoseStamped
 
-    from .. import config
+    from .. import config, tuning
     from .arduino_node import STATE_UNKNOWN
 
     class OdometryNode(Node):
@@ -279,6 +279,17 @@ def ros_main(args=None):
 
             self._pose_pub = self.create_publisher(PoseStamped, "/car/pose", 10)
             self._conf_pub = self.create_publisher(Float32, "/car/pose_confidence", 10)
+
+            # 실차 캘리브레이션 파라미터 — CAMERA_MOUNT(높이/틸트)와 ODOMETRY
+            # (pwm_to_mps 등)를 rebuild 없이 ros2 param set으로 넣을 수 있게
+            # 노출한다 (0.0=미측정 규약). camera_mount가 바뀌면 캐시된
+            # 호모그래피(_H)를 무효화해 다음 프레임에 재계산한다.
+            tuning.install(self, tuning.odometry_tunable_dicts(),
+                           on_change=self._on_tuning_change)
+
+        def _on_tuning_change(self, param_name):
+            if param_name.startswith("camera_mount."):
+                self._H = None
 
         def _on_state(self, msg):
             self._car_state = None if msg.data == STATE_UNKNOWN else msg.data

@@ -45,9 +45,25 @@ OBSTACLE_STOP_M = 0.7
 # 미션별 튜닝값(장애물 감지, 차선 변경, 정지선, T주차, 차선 인식, 신호등 판정)은
 # 각 미션 파일 상단으로 옮겼다 — 소비하는 곳 근처에 두는 게 더 직관적이라는 판단
 # (auto_ws 스타일 참고). road.py: OBSTACLE_CAM/LANE_CHANGE, lane_follow.py:
-# LANE_EDGE, traffic.py: STOP_LINE/TRAFFIC_PIXEL_RATIO, t_parking.py: T_PARKING
-# (+ PARKING_LINE_WHITE/PARK_PULSE_GAP_S — 다른 파일 값과 공유하는 로컬 상수,
-# 해당 파일 주석에 교차 참조 있음).
+# LANE_EDGE/LANE_POI, traffic.py: STOP_LINE/TRAFFIC_PIXEL_RATIO,
+# t_parking.py: T_PARKING. 여러 미션이 공유하는 값(흰색 임계, 펄스 주기)만
+# 아래에 단일 소스로 둔다.
+
+# 대회 규격 흰색(차선/정지선/주차선/장애물 차량 전부 동일 규격) HSV 임계 —
+# 단일 소스. 감지기별로 다르게 찍히면 각 감지기 dict의 white_s_max/white_v_min
+# override 키(None=이 값 사용)로 개별 조정한다.
+WHITE_HSV = dict(s_max=60, v_min=180)
+
+# steer_pulse() 반복 전송 최소 간격(초) — 차선 변경(road)과 T주차(t_parking)가
+# 공유한다 (같은 액추에이터 특성이라 따로 튜닝할 이유가 없음).
+STEER_PULSE_GAP_S = 0.15
+
+
+def white_hsv(detector_cfg):
+    """감지기 dict의 white_s_max/white_v_min override가 설정돼 있으면 그 값,
+    None이면 공유 WHITE_HSV를 쓴다. (s_max, v_min) 반환."""
+    return (detector_cfg.get("white_s_max") or WHITE_HSV["s_max"],
+            detector_cfg.get("white_v_min") or WHITE_HSV["v_min"])
 
 # 참고용 실측 차량 제원 (WSL ~/autonomousAIdrive/sim/models/av_car/model.sdf,
 # kinematic_single_track_parameters.md 기반 측정치). 현재 조향은 120ms 펄스

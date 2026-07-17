@@ -76,15 +76,37 @@ def _run_lane_follow():
 
 
 def _run_traffic():
-    return _load("smoke_test_missions").test_traffic_fsm()
+    m = _load("smoke_test_missions")
+    return all([m.test_traffic_fsm(), m.test_vendor_fallback_sync()])
 
 
 def _run_road():
-    return _load("smoke_test_missions").test_road_lane_change()
+    m = _load("smoke_test_missions")
+    return all([m.test_road_lane_change(), m.test_lane_change_distance_mode()])
 
 
 def _run_parking():
-    return _load("smoke_test_missions").test_t_parking()
+    m = _load("smoke_test_missions")
+    return all([m.test_t_parking(), m.test_t_parking_occupancy(),
+                m.test_t_parking_exit_disabled(), m.test_t_parking_exit_stop_mode()])
+
+
+def _run_occupancy_grid():
+    # 순수 격자 로직(정합/역변환/chord)은 missions/occupancy.py 로컬 셀프테스트로 관리
+    m = _load("autodrive_skku_ros.missions.occupancy")
+    return m.selftest() == 0
+
+
+def _run_tuning():
+    m = _load("smoke_test_tuning")
+    return all([m.test_flatten_coverage(), m.test_apply_identity(),
+                m.test_type_roundtrip()])
+
+
+def _run_debug_viz():
+    m = _load("smoke_test_debug_viz")
+    return all([m.test_lane_poi_analysis(), m.test_debug_out_dicts(),
+                m.test_draw_functions()])
 
 
 MODULES = {
@@ -96,6 +118,9 @@ MODULES = {
     "traffic": ("traffic 미션 상태머신 (정지선/신호등)", _run_traffic),
     "road": ("road 미션 장애물 회피 차선 변경", _run_road),
     "parking": ("t_parking 미션 상태머신 end-to-end", _run_parking),
+    "occupancy": ("T주차 점유 격자 (odom 정합/스캔 역변환/chord 갭)", _run_occupancy_grid),
+    "tuning": ("ROS 파라미터 ↔ 튜닝 dict 바인딩 (flatten/apply, in-place 검증)", _run_tuning),
+    "debug_viz": ("디버그 오버레이 드로잉 + 감지기 debug out-dict (headless)", _run_debug_viz),
 }
 
 

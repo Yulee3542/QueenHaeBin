@@ -7,7 +7,7 @@ keepalive 스레드 포함). ros_main()의 ArduinoBridgeNode가 이 클래스를
 dedup), /car/cmd/steer_pulse(String, 강제) 토픽을 구독해 대응 메서드를 호출하고
 /car/state(Int8)를 발행한다. 시리얼 프로토콜은 README '시리얼 프로토콜' 절 참고.
 
-조향 POT(가변저항, A2)이 장착돼 있으면 기동 시 1회 좌/우 풀락 ADC를 자동으로
+조향 POT(가변저항, A6)이 장착돼 있으면 기동 시 1회 좌/우 풀락 ADC를 자동으로
 찾아(calibrate_steering) /car/steering_pot(Int32, raw ADC), /car/steering_angle
 (Float32, deg)로 발행한다. POT 미장착이면 자동으로 스킵되고 기존 펄스 방식
 그대로 동작 — 이 하드웨어는 선택사항이다.
@@ -36,7 +36,7 @@ class ArduinoNode:
 
     def __init__(self, port, baud=9600):
         self.state = None  # 0 정지 / 1 전진 / 2 후진
-        self.pot_adc = None  # 조향 POT 원시값(A2, 0~1023) — 펌웨어가 항상 보냄
+        self.pot_adc = None  # 조향 POT 원시값(A6, 0~1023) — 펌웨어가 항상 보냄
         self._ser = None
         self._speed = 0
         self._last = {}
