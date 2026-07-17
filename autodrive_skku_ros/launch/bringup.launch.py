@@ -66,7 +66,10 @@ def generate_launch_description():
     rear_camera_arg = DeclareLaunchArgument(
         "rear_camera", default_value="-1", description="-1이면 후방 카메라 미사용")
     show_arg = DeclareLaunchArgument(
-        "show", default_value="false", description="카메라 창 표시 (디스플레이 필요)")
+        "show", default_value="false",
+        description="카메라 창 표시 (디스플레이 필요 — DISPLAY 환경변수 없으면 "
+                     "mission_node가 경고 후 자동으로 꺼짐, 2026-07-17 이전엔 "
+                     "SSH/헤드리스에서 프로세스 전체가 죽었음)")
     foxglove_port_arg = DeclareLaunchArgument("foxglove_port", default_value="8765")
     calibrate_steering_arg = DeclareLaunchArgument(
         "calibrate_steering", default_value="true",
