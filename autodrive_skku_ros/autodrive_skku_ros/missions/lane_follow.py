@@ -88,6 +88,19 @@ LANE_POI = dict(
     hough_max_radius_px=2000,    # 이보다 크면 사실상 직선 취급 📏
     hough_min_inlier_bands=3,    # 원 채택에 필요한 최소 일치 밴드 수
     hough_inlier_tol_px=25,      # 밴드 타겟과 원호 예측치 허용 오차(px)
+    # ---- 실선/점선 분류 (2026-07-17, 팀원 C920 분류기 이식) ----
+    # POI 전체 높이에서 클러스터 컬럼의 세로 점유율/최장연속구간/구간수로
+    # 실선(solid)·점선(dashed)을 판정 — "밴드 안 클러스터 중 오른쪽 두 개가
+    # 점선+실선"이라고 위치만으로 가정하던 기존 휴리스틱을 검증한다. 확실한
+    # dashed+solid 쌍을 못 찾으면 기존 위치 휴리스틱으로 100% 폴백.
+    lane_type_half_width_px=15,        # 분류용 밴드 반폭(클러스터 중심 기준)
+    lane_type_row_min_pixels=2,        # 이 이상 흰 픽셀 있어야 그 행을 "점유"로 침
+    lane_type_solid_coverage=0.70,     # 📏
+    lane_type_solid_longest_ratio=0.45,  # 📏
+    lane_type_dashed_min_coverage=0.15,  # 📏
+    lane_type_dashed_max_coverage=0.70,  # 📏
+    lane_type_dashed_min_runs=2,
+    lane_type_none_coverage=0.05,      # 📏
 )
 
 
@@ -125,11 +138,68 @@ def _poi_find_clusters(binary, gap_px, min_mass, max_width, min_row_span_frac):
     return out
 
 
-def _poi_pick_right_lane_center(clusters):
-    """3개+: 우측 실선 + 중앙 점선의 중점(우측 차선 중앙). 2개: 점선이 이번
-    프레임엔 안 보인다고 보고(점선이라 정상) 좌/우 실선 3/4 지점으로 보간.
-    1개 이하: 추정 불가 -> None."""
+def _classify_lane_type(binary_full, x, cfg):
+    """POI 전체 높이(binary_full)에서 x 근처 세로 밴드의 행별 점유를 스캔해
+    차선 종류를 추정한다(팀원 C920 프로토타입의 LaneClassifier 이식 —
+    점유율/최장연속구간/구간수 기준). 'solid'/'dashed'/'none'/'unknown' 중
+    하나를 반환."""
+    h, w = binary_full.shape[:2]
+    half = cfg["lane_type_half_width_px"]
+    x0 = max(0, int(round(x - half)))
+    x1 = min(w, int(round(x + half)))
+    if x1 <= x0 or h == 0:
+        return "none"
+    band = binary_full[:, x0:x1]
+    occupied = (band > 0).sum(axis=1) >= cfg["lane_type_row_min_pixels"]
+
+    occupied_rows = int(occupied.sum())
+    longest = current = runs = 0
+    for is_occ in occupied:
+        if is_occ:
+            current += 1
+            longest = max(longest, current)
+        else:
+            if current > 0:
+                runs += 1
+            current = 0
+    if current > 0:
+        runs += 1
+
+    coverage = occupied_rows / h
+    longest_ratio = longest / h
+
+    if coverage > cfg["lane_type_solid_coverage"] and \
+            longest_ratio > cfg["lane_type_solid_longest_ratio"]:
+        return "solid"
+    if runs >= cfg["lane_type_dashed_min_runs"] and \
+            cfg["lane_type_dashed_min_coverage"] < coverage <= cfg["lane_type_dashed_max_coverage"]:
+        return "dashed"
+    if coverage < cfg["lane_type_none_coverage"]:
+        return "none"
+    return "unknown"
+
+
+def _poi_pick_right_lane_center(clusters, binary_full=None, cfg=None):
+    """실선/점선 분류로 검증된 (점선, 실선) 쌍이 있으면 그걸 우선 사용 —
+    가장 오른쪽 solid를 찾고 그 왼쪽에서 가장 가까운 dashed를 찾아 그
+    사이(3/4 지점, 실제 우측차선 중앙)를 목표로 삼는다. binary_full/cfg가
+    없거나 확실한 쌍을 못 찾으면 기존 위치 휴리스틱으로 폴백(3개+: 우측
+    실선+중앙 점선으로 가정한 오른쪽 두 개의 중점. 2개: 점선이 이번
+    프레임엔 안 보인다고 보고 좌/우 실선 3/4 지점으로 보간). 1개 이하:
+    추정 불가 -> None."""
     cols = [c[0] for c in clusters]
+
+    if binary_full is not None and cfg is not None and len(cols) >= 2:
+        types = [_classify_lane_type(binary_full, c, cfg) for c in cols]
+        solid_i = next((i for i in range(len(cols) - 1, -1, -1)
+                        if types[i] == "solid"), None)
+        if solid_i is not None:
+            dashed_i = next((j for j in range(solid_i - 1, -1, -1)
+                             if types[j] == "dashed"), None)
+            if dashed_i is not None:
+                left, right = cols[dashed_i], cols[solid_i]
+                return left + 0.75 * (right - left)
+
     if len(cols) >= 3:
         return (cols[-1] + cols[-2]) / 2.0
     if len(cols) == 2:
@@ -210,6 +280,15 @@ def analyze_lane_poi(frame, config=LANE_POI):
     h, w = frame.shape[:2]
     cx = w / 2.0
     n_bands = config["n_bands"]
+
+    # POI 전체(모든 밴드를 합친 y범위) 이진 마스크 — 실선/점선 분류와
+    # Circular Hough 피팅이 공유해서 쓴다(중복 연산 방지).
+    y_top = int(h * config["roi_frac"][0])
+    y_bottom = int(h * config["roi_frac"][1])
+    gray_full = cv2.cvtColor(frame[y_top:y_bottom, :], cv2.COLOR_BGR2GRAY)
+    _, binary_full = cv2.threshold(gray_full, config["white_thresh"], 255,
+                                   cv2.THRESH_BINARY)
+
     bands = []
     path_points = []
     for i in range(n_bands):
@@ -224,7 +303,7 @@ def analyze_lane_poi(frame, config=LANE_POI):
             binary, config["cluster_gap_px"], config["min_cluster_mass"],
             config["max_cluster_width_px"], config["min_row_span_frac"])
         clusters = [(c + x_lo, m, lo + x_lo, hi + x_lo) for (c, m, lo, hi) in clusters]
-        target = _poi_pick_right_lane_center(clusters)
+        target = _poi_pick_right_lane_center(clusters, binary_full, config)
         bands.append(dict(y0=y0, y1=y1, x_lo=x_lo, x_hi=x_hi,
                           clusters=clusters, target=target))
         if target is not None:
@@ -234,11 +313,6 @@ def analyze_lane_poi(frame, config=LANE_POI):
 
     circle = None
     if config["hough_enabled"] and len(path_points) >= config["hough_min_inlier_bands"]:
-        y_top = int(h * config["roi_frac"][0])
-        y_bottom = int(h * config["roi_frac"][1])
-        gray_full = cv2.cvtColor(frame[y_top:y_bottom, :], cv2.COLOR_BGR2GRAY)
-        _, binary_full = cv2.threshold(gray_full, config["white_thresh"], 255,
-                                       cv2.THRESH_BINARY)
         fit = _fit_lane_circle(binary_full, 0, y_top, config)
         if fit is not None:
             ccx, ccy, cr = fit
