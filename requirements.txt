@@ -9,3 +9,10 @@
 #
 # 설치: pip3 install --user -r requirements.txt
 rplidar-roboticia
+
+# ultralytics(+torch, 자동 설치) — traffic 미션의 YOLO 신호등 색상 인식(1순위)
+# 용. 완전히 선택 사항: 미설치면 missions/traffic_yolo.py의 load_model()이
+# None을 반환하고 traffic.py가 자동으로 HSV 검출(detect_light_color)만 쓴다
+# (예외 없음). 무거운 의존성(torch)이라 개발/CI 환경에서는 생략해도 무방 —
+# tools/smoke_test_missions.py는 두 경우 모두 통과해야 한다.
+ultralytics

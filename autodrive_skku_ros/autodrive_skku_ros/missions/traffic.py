@@ -7,6 +7,7 @@ except ImportError:
 
 from .base import Mission
 from .lane_follow import LaneCenterTracker, follow_lane_poi, LANE_POI
+from . import traffic_yolo
 from .. import config as _config
 
 # vendor 미설치 개발 환경용 폴백 상수 복사본. vendor 파일은 수정 금지(대회 규정)라
@@ -39,6 +40,20 @@ STOP_LINE = dict(
     min_rows=6,            # 연속으로 임계를 넘어야 하는 행 수
     wait_max_s=6.0,        # 정지선 대기 중 신호등 미검출 시 재출발까지 시간 (교착 방지)
     cooldown_s=3.0,        # 재출발 후 같은 정지선 재트리거 억제
+)
+
+# 신호등 색 판정: YOLO(1순위) + HSV(폴백, detect_light_color) 이중 검출 +
+# 프레임 연속 판정(debounce). red/green 비대칭 — 빨간불 오인은 손해가 없지만
+# 초록불 오인(=빨간불 출발)은 규정 감점이라, 초록 확정에 더 많은 연속 프레임을
+# 요구한다(팀 저장소 ParkGaYoung/Haebin/yeoeun_traffic 구현 공통 설계).
+TRAFFIC_LIGHT = dict(
+    use_yolo=True,                              # False면 HSV(detect_light_color)만 사용
+    model_path=traffic_yolo.DEFAULT_MODEL_PATH,  # 문자열 기본값 — tuning.py의 None
+                                                  # 슬롯(NONE_SENTINEL/float 전용)과
+                                                  # 섞이면 안 되므로 실제 경로를 기본값으로 둔다
+    conf=0.35,                   # YOLO confidence 임계
+    red_confirm_n=2,             # 연속 몇 프레임 'red'여야 정지 상태 진입
+    green_confirm_n=3,           # 연속 몇 프레임 'green'이어야 재출발 (비대칭: red보다 엄격)
 )
 
 
@@ -79,10 +94,20 @@ class TrafficMission(Mission):
 
     목표:
       (1) 정지선 인식      — 테스트 구현 (흰색 가로 밴드, 행 채움비 판정)
-      (2) 신호등 라이트 인식 — 동작 (HSV 픽셀 비율 판정)
+      (2) 신호등 라이트 인식 — 동작 (YOLO 1순위 + HSV 픽셀 비율 폴백)
 
     동작: 차선 추종 주행 중 정지선을 만나면 정지, 초록불이면 다시 출발.
-    빨간불은 언제든 즉시 정지 (main3 검증 로직과 동일).
+    빨간불은 언제든 정지 (main3 검증 로직과 동일).
+
+    신호등 색 판정 (TRAFFIC_LIGHT 튜닝값, `_detect_light_color` 참고):
+      YOLO(1순위, `traffic_yolo.detect_light_color_yolo`)가 이번 프레임에 확정
+      결과(red/green)를 못 주면(미검출/모델 없음/추론 실패) HSV(`detect_light_color`)
+      로 그 프레임만 폴백한다. 팀 저장소(yeoeun_traffic/ParkGaYoung/Haebin)
+      구현들과 동일하게 이중 검출 구조.
+      또한 단일 프레임 오검출을 막기 위해 연속 프레임 판정(debounce)을 쓴다 —
+      `red_confirm_n`번 연속 red여야 정지 상태에 진입하고, `green_confirm_n`번
+      연속 green이어야(red보다 엄격 — 비대칭) 재출발한다. 빨간불에서 잘못
+      출발하면 규정 감점이지만 초록불에서 늦게 출발하는 건 손해가 없기 때문.
 
     대기 상태 구분 (wait):
       "red"  — 빨간불을 본 대기. 초록불이 뜰 때까지 무기한 대기
@@ -103,15 +128,40 @@ class TrafficMission(Mission):
         self.wait = None            # None | "line" | "red"
         self.wait_t0 = 0.0
         self.cooldown_until = 0.0
+        self._red_streak = 0
+        self._green_streak = 0
+        self._yolo_model = (traffic_yolo.load_model(TRAFFIC_LIGHT["model_path"])
+                            if TRAFFIC_LIGHT["use_yolo"] else None)
         car.go()
         car.drive(config.DRIVE_SPEED)
+
+    def _detect_light_color(self, frame, debug=None):
+        """YOLO(1순위) → 확정 결과 없으면 HSV(폴백)로 그 프레임만 재판정."""
+        if self._yolo_model is not None:
+            yolo_dbg = {}
+            result = traffic_yolo.detect_light_color_yolo(
+                self._yolo_model, frame, conf=TRAFFIC_LIGHT["conf"], debug=yolo_dbg)
+            if result is not None:
+                if debug is not None:
+                    debug.update(yolo_dbg)
+                return result
+        hsv_dbg = {}
+        result = detect_light_color(frame, TRAFFIC_PIXEL_RATIO, debug=hsv_dbg)
+        hsv_dbg["source"] = "hsv"
+        if debug is not None:
+            debug.update(hsv_dbg)
+        return result
 
     def step(self, sensors, car):
         now = self._now()
         light_dbg = {}
-        color = detect_light_color(sensors.get("top"), TRAFFIC_PIXEL_RATIO,
-                                   debug=light_dbg)
+        raw_color = self._detect_light_color(sensors.get("top"), debug=light_dbg)
         self.debug["traffic_light"] = light_dbg
+
+        self._red_streak = self._red_streak + 1 if raw_color == "red" else 0
+        self._green_streak = self._green_streak + 1 if raw_color == "green" else 0
+        color = "red" if self._red_streak >= TRAFFIC_LIGHT["red_confirm_n"] else \
+            "green" if self._green_streak >= TRAFFIC_LIGHT["green_confirm_n"] else None
 
         if color == "red" and self.wait != "red":
             self.wait = "red"

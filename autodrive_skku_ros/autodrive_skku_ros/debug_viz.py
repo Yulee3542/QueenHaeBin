@@ -140,15 +140,25 @@ def draw_stop_line(frame, dbg):
 
 
 def draw_traffic_light(frame, dbg):
-    """detect_light_color의 debug dict를 그린다 — 픽셀 카운트/임계/판정."""
-    if not dbg or "red" not in dbg:
+    """TrafficMission._detect_light_color의 debug dict를 그린다 — YOLO(bbox+
+    confidence) 또는 HSV(픽셀 카운트/임계) 판정, 어느 쪽이 쓰였는지(source)."""
+    if not dbg or "result" not in dbg:
         return _no_data(frame, "traffic_light")
     vis = frame.copy()
     result = dbg.get("result")
     color = _RED if result == "red" else _GREEN if result == "green" else _GRAY
-    cv2.putText(vis, f"light={result}", (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    cv2.putText(vis, f"red={dbg['red']} green={dbg['green']} min={dbg['min_pixels']}",
-                (5, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    cv2.putText(vis, f"light={result} ({dbg.get('source', '?')})",
+                (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    if dbg.get("source") == "yolo":
+        bbox = dbg.get("bbox")
+        if bbox is not None:
+            x1, y1, x2, y2 = (int(v) for v in bbox)
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(vis, f"class={dbg.get('class_name')} conf={dbg.get('confidence')}",
+                    (5, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    else:
+        cv2.putText(vis, f"red={dbg.get('red')} green={dbg.get('green')} min={dbg.get('min_pixels')}",
+                    (5, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
     return vis
 
 

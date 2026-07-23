@@ -29,7 +29,7 @@ except ImportError as e:
 from autodrive_skku_ros import config
 from autodrive_skku_ros.missions import traffic as traffic_mod
 from autodrive_skku_ros.missions.road import RoadMission, detect_obstacle_ahead, OBSTACLE_CAM, LANE_CHANGE
-from autodrive_skku_ros.missions.traffic import TrafficMission, STOP_LINE
+from autodrive_skku_ros.missions.traffic import TrafficMission, STOP_LINE, TRAFFIC_LIGHT
 from autodrive_skku_ros.missions.t_parking import TParkingMission, T_PARKING
 
 
@@ -188,11 +188,15 @@ def test_vendor_fallback_sync():
 # ---- 2. traffic 미션 FSM (정지선 대기 / 교착 가드 / 빨간불 / cooldown) ----
 
 def test_traffic_fsm():
-    print("== traffic 미션 상태머신 ==")
+    """HSV 폴백 경로 + 신호등 색 디바운스(연속 프레임 확정) 검증.
+    YOLO는 이 환경에 ultralytics가 있든 없든 결정적으로 끄고(_yolo_model=None)
+    테스트한다 — YOLO 우선순위/폴백 자체는 test_traffic_yolo_priority에서 별도 검증."""
+    print("== traffic 미션 상태머신 (HSV 경로 + 디바운스) ==")
     ok = True
     m, car, clk = TrafficMission(), FakeCar(), FakeClock()
     m.on_start(car, config)
     m._now = clk
+    m._yolo_model = None
 
     m.step(sensors(bottom=stop_line_frame()), car)
     ok &= check("정지선 → 정지 + wait='line'", m.wait == "line" and car.drives[-1] == 0)
@@ -206,16 +210,64 @@ def test_traffic_fsm():
     ok &= check("cooldown 중 정지선 재트리거 안 함", m.wait is None)
 
     clk.advance(STOP_LINE["cooldown_s"] + 0.1)
+    for _ in range(TRAFFIC_LIGHT["red_confirm_n"] - 1):
+        m.step(sensors(top=color_frame((0, 0, 255)), bottom=blank()), car)
+    ok &= check(f"빨간불 {TRAFFIC_LIGHT['red_confirm_n'] - 1}프레임(확정 전) → 아직 주행",
+                m.wait is None)
     m.step(sensors(top=color_frame((0, 0, 255)), bottom=blank()), car)
-    ok &= check("빨간불 → 정지 + wait='red'", m.wait == "red" and car.drives[-1] == 0)
+    ok &= check(f"빨간불 {TRAFFIC_LIGHT['red_confirm_n']}프레임 연속 → 정지 + wait='red'",
+                m.wait == "red" and car.drives[-1] == 0)
 
     clk.advance(60.0)
     m.step(sensors(bottom=blank()), car)
     ok &= check("빨간불 대기는 타임아웃 없음 (초록불까지 무기한)",
                 m.wait == "red" and car.drives[-1] == 0)
 
+    for _ in range(TRAFFIC_LIGHT["green_confirm_n"] - 1):
+        m.step(sensors(top=color_frame((0, 255, 0)), bottom=blank()), car)
+    ok &= check(f"초록불 {TRAFFIC_LIGHT['green_confirm_n'] - 1}프레임(확정 전) → 아직 대기 "
+                "(비대칭 디바운스 — 빨간불 출발 방지가 우선)", m.wait == "red")
     m.step(sensors(top=color_frame((0, 255, 0)), bottom=blank()), car)
-    ok &= check("초록불 → 재출발", m.wait is None and car.drives[-1] == config.DRIVE_SPEED)
+    ok &= check(f"초록불 {TRAFFIC_LIGHT['green_confirm_n']}프레임 연속 → 재출발",
+                m.wait is None and car.drives[-1] == config.DRIVE_SPEED)
+    return ok
+
+
+# ---- 2b. traffic 미션: YOLO 우선 + HSV 폴백 (ultralytics 설치 여부와 무관하게
+# 결정적으로 검증하기 위해 traffic_yolo.detect_light_color_yolo 자체를 monkeypatch) ----
+
+def test_traffic_yolo_priority_and_fallback():
+    print("== traffic 미션 YOLO 우선 + HSV 폴백 ==")
+    ok = True
+    m, car, clk = TrafficMission(), FakeCar(), FakeClock()
+    m.on_start(car, config)
+    m._now = clk
+    m._yolo_model = object()  # load_model() 실제 결과와 무관 — 아래서 함수 자체를 대체
+
+    orig = traffic_mod.traffic_yolo.detect_light_color_yolo
+
+    def fake_yolo(result):
+        def _f(model, frame, conf=0.35, debug=None):
+            if debug is not None:
+                debug.update(source="yolo", class_name=result, confidence=0.9,
+                             bbox=(1, 1, 2, 2), result=result)
+            return result
+        return _f
+
+    try:
+        traffic_mod.traffic_yolo.detect_light_color_yolo = fake_yolo("red")
+        dbg = {}
+        # HSV라면 초록으로 볼 프레임을 줘도 YOLO가 'red' 확정이면 그대로 채택돼야 함
+        color = m._detect_light_color(color_frame((0, 255, 0)), debug=dbg)
+        ok &= check("YOLO 확정 결과가 HSV보다 우선", color == "red" and dbg.get("source") == "yolo")
+
+        traffic_mod.traffic_yolo.detect_light_color_yolo = fake_yolo(None)
+        dbg2 = {}
+        color2 = m._detect_light_color(color_frame((0, 255, 0)), debug=dbg2)
+        ok &= check("YOLO 미검출(None) → HSV 폴백 (초록 프레임 → green)",
+                    color2 == "green" and dbg2.get("source") == "hsv")
+    finally:
+        traffic_mod.traffic_yolo.detect_light_color_yolo = orig
     return ok
 
 
@@ -435,6 +487,7 @@ def main():
         test_white_discrimination(),
         test_vendor_fallback_sync(),
         test_traffic_fsm(),
+        test_traffic_yolo_priority_and_fallback(),
         test_road_lane_change(),
         test_lane_change_distance_mode(),
         test_t_parking(),

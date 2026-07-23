@@ -45,6 +45,7 @@ def tunable_dicts():
         "lane_change": road.LANE_CHANGE,
         "obstacle_cam": road.OBSTACLE_CAM,
         "stop_line": traffic.STOP_LINE,
+        "traffic_light": traffic.TRAFFIC_LIGHT,
         "t_parking": t_parking.T_PARKING,
         "lidar_mount": config.LIDAR_MOUNT,
     }
